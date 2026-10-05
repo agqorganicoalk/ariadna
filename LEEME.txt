@@ -1,0 +1,26 @@
+ARIADNA · AGQ Labs | Life Services
+Guía de laboratorio — versión independiente (sin Claude, sin nube)
+
+Qué es: una app web que funciona en el navegador del móvil. Todos los datos y fotos se quedan en el móvil
+hasta que el analista descarga el .zip final y lo sube a SharePoint. No necesita cuentas ni licencias.
+
+PUBLICARLA GRATIS (una sola vez, 10 minutos) con GitHub Pages:
+ 1. Crea una cuenta gratuita en https://github.com
+ 2. Botón "New repository": nombre p. ej. ariadna, marca "Public" y crea.
+ 3. "uploading an existing file": arrastra TODOS los archivos de esta carpeta (no la carpeta) y pulsa "Commit changes".
+ 4. Settings > Pages > Source: "Deploy from a branch" > Branch: main / (root) > Save.
+ 5. En 1-2 minutos la app estará en https://TU-USUARIO.github.io/ariadna/
+ En el repositorio solo está la app (código y configuración de PNT); ningún dato de ensayos sale de los móviles.
+
+INSTALARLA EN CADA MÓVIL (recomendado: los datos quedan más protegidos y funciona sin conexión):
+ - Android (Chrome): abrir el enlace > menú ⋮ > "Añadir a pantalla de inicio" / "Instalar aplicación".
+ - iPhone (Safari): abrir el enlace > botón Compartir > "Añadir a pantalla de inicio".
+ Usar siempre el mismo icono (o el mismo navegador): cada navegador guarda sus propios datos.
+
+PARA NO PERDER NADA:
+ - Cada cambio se guarda al momento en el móvil.
+ - La app pide guardar una COPIA DE SEGURIDAD al terminar cada tanda y cada hora (botón también en Registro y en Sesión).
+ - Si algo fallase: Sesión > "Restaurar una copia (.zip)" y se sigue donde se dejó.
+ - Al finalizar: descargar el CSV y el .zip de datos primarios y subirlos a la carpeta de la OT en SharePoint.
+
+ACTUALIZAR LA APP: sustituye los archivos en el repositorio y cambia VERSION en sw.js.
