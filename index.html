@@ -296,7 +296,7 @@ button:disabled{cursor:not-allowed}
 "use strict";
 
 /* ================= Configuración ================= */
-const APP_VERSION = "1.0-piloto · 06/10/2026e";
+const APP_VERSION = "1.0-piloto · 06/10/2026h";
 const DOMINIO = "agqlabs.com";
 const FORMACION = {
   formado:      { lbl:"Formado en el PNT",              acomp:false },
@@ -3042,32 +3042,94 @@ function csvRows(){
    para copiar y pegar cada bloque en la hoja de procesado. */
 const xesc = v => String(v).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
 const colName = i => { let s = ""; i++; while (i > 0) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; };
-async function xlsxBlob(sheets){
-  const zip = new JSZip(), X = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
-  zip.file("[Content_Types].xml", `${X}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}</Types>`);
-  zip.file("_rels/.rels", `${X}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`);
-  zip.file("xl/workbook.xml", `${X}<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((sh, i) => `<sheet name="${xesc(sh.name)}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join("")}</sheets></workbook>`);
-  zip.file("xl/_rels/workbook.xml.rels", `${X}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`);
-  zip.file("xl/styles.xml", `${X}<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<fonts count="4"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font><font><b/><sz val="14"/><color rgb="FF12224A"/><name val="Calibri"/></font></fonts>
-<fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF12224A"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE2E8F3"/></patternFill></fill></fills>
-<borders count="2"><border/><border><left style="thin"><color rgb="FFC9D2E3"/></left><right style="thin"><color rgb="FFC9D2E3"/></right><top style="thin"><color rgb="FFC9D2E3"/></top><bottom style="thin"><color rgb="FFC9D2E3"/></bottom></border></borders>
+/* Logo de Ariadna (símbolo) en PNG para el Excel: se dibuja del SVG de la app, sin archivos externos. */
+const ARIADNA_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><g fill="none" stroke="#12224A" stroke-width="6.2"><path d="M13.58 43.50 A37 37 0 0 1 86.42 43.50"/><path d="M13.58 56.50 A37 37 0 0 0 86.42 56.50"/><path d="M24.31 43.50 A26.5 26.5 0 0 1 75.69 43.50"/><path d="M24.31 56.50 A26.5 26.5 0 0 0 75.69 56.50"/><path d="M35.38 43.50 A16 16 0 0 1 64.62 43.50"/><path d="M35.38 56.50 A16 16 0 0 0 64.62 56.50"/></g><path d="M54.02 44.27 A7 7 0 1 0 54.02 55.73" stroke="#12224A" stroke-width="5.2" fill="none" stroke-linecap="round"/><path d="M3 50 H41 M51 50 H88" stroke="#639C4F" stroke-width="5.6" stroke-linecap="round"/><circle cx="91" cy="50" r="5.2" fill="#639C4F"/></svg>`;
+let LOGO_PNG = null;
+async function logoPng(){
+  if (LOGO_PNG) return LOGO_PNG;
+  try { const img = new Image(); img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(ARIADNA_SVG); await img.decode();
+    const cv = document.createElement("canvas"); cv.width = cv.height = 240; cv.getContext("2d").drawImage(img, 0, 0, 240, 240);
+    LOGO_PNG = await new Promise(r => cv.toBlob(r, "image/png")); } catch(_) { LOGO_PNG = null; }
+  return LOGO_PNG;
+}
+/* Estilos (índices usados en las hojas): 0 normal · 1 etiqueta · 2 título de bloque · 3 cabecera de tabla · 4 casilla de firma · 5 título ·
+   6 conforme · 7 a revisar · 8 enlace · 9 subtítulo · 10 cita · 11 valor · 12 texto largo */
+const XLSX_STYLES = `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="13"><font><sz val="10"/><color rgb="FF1D1D1F"/><name val="Aptos"/><family val="2"/></font><font><b/><sz val="10"/><color rgb="FF12224A"/><name val="Aptos"/><family val="2"/></font><font><b/><sz val="11"/><color rgb="FF12224A"/><name val="Aptos"/><family val="2"/></font><font><b/><sz val="22"/><color rgb="FF12224A"/><name val="Aptos"/><family val="2"/></font><font><u/><sz val="10"/><color rgb="FF2F6FB5"/><name val="Aptos"/><family val="2"/></font><font><sz val="10"/><color rgb="FF86868B"/><name val="Aptos"/><family val="2"/></font><font><i/><sz val="10"/><color rgb="FF86868B"/><name val="Aptos"/><family val="2"/></font><font><b/><sz val="10"/><color rgb="FF3F7A33"/><name val="Aptos"/><family val="2"/></font><font><b/><sz val="10"/><color rgb="FF8A5A00"/><name val="Aptos"/><family val="2"/></font><font><b/><sz val="14"/><color rgb="FF12224A"/><name val="Aptos"/><family val="2"/></font><font><sz val="26"/><color rgb="FF12224A"/><name val="Aptos Light"/><family val="2"/></font><font><sz val="26"/><color rgb="FFB7791F"/><name val="Aptos Light"/><family val="2"/></font><font><sz val="9"/><color rgb="FF86868B"/><name val="Aptos"/><family val="2"/></font></fonts>
+<fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF5F5F7"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEEF5EC"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF5E1"/></patternFill></fill></fills>
+<borders count="4"><border/><border><bottom style="thin"><color rgb="FFE5E5EA"/></bottom></border><border><bottom style="medium"><color rgb="FF639C4F"/></bottom></border><border><bottom style="thin"><color rgb="FF12224A"/></bottom></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="6"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="2" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="1" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/><xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>
+<cellXfs count="19">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="5" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="2" fillId="0" borderId="2" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment vertical="bottom"/></xf>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="3" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="7" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" indent="1"/></xf>
+<xf numFmtId="0" fontId="8" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" indent="1"/></xf>
+<xf numFmtId="0" fontId="4" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="5" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="top"/></xf>
+<xf numFmtId="0" fontId="6" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="9" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="10" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="left" vertical="bottom"/></xf>
+<xf numFmtId="0" fontId="11" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="left" vertical="bottom"/></xf>
+<xf numFmtId="0" fontId="12" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="top"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="2" xfId="0" applyBorder="1"/>
+<xf numFmtId="0" fontId="5" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+</cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
-</styleSheet>`);
+</styleSheet>`;
+/* Opciones por hoja: rows, widths, freeze (filas fijas), table (nombre) + tableAt (fila de cabecera, base 0), heights {fila: pt}, tab (color), logo. */
+async function xlsxBlob(sheets){
+  const zip = new JSZip(), X = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  const logo = sheets.some(s => s.logo) ? await logoPng() : null, ses = S.session || {};
+  const ct = [`<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/>`,
+    `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>`];
+  zip.file("_rels/.rels", `${X}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${R}/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>`);
+  const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  zip.file("docProps/core.xml", `${X}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${xesc(`Ariadna · ${ses.pnt || ""} · OT ${ses.workCode || ""}`)}</dc:title><dc:subject>Datos primarios del ensayo ${xesc(ses.testId || "")}</dc:subject><dc:creator>${xesc(ses.operator || "Ariadna")}</dc:creator><cp:keywords>Ariadna; AGQ Labs | Life Services; ISO/IEC 17025</cp:keywords><dc:description>${xesc("Generado por Ariadna " + APP_VERSION + " · AGQ Labs | Life Services")}</dc:description><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created></cp:coreProperties>`);
+  zip.file("xl/workbook.xml", `${X}<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${R}"><sheets>${sheets.map((sh, i) => `<sheet name="${xesc(sh.name)}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join("")}</sheets></workbook>`);
+  zip.file("xl/_rels/workbook.xml.rels", `${X}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i+1}" Type="${R}/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length+1}" Type="${R}/styles" Target="styles.xml"/></Relationships>`);
+  zip.file("xl/styles.xml", X + XLSX_STYLES);
+  if (logo) zip.file("xl/media/logo.png", logo);
+  const hf = `<headerFooter><oddHeader>${xesc(`&L&"Aptos,Bold"&10&K12224AAriadna&R&"Aptos,Regular"&9&K86868BAGQ Labs | Life Services`)}</oddHeader><oddFooter>${xesc(`&L&"Aptos,Regular"&8&K86868B&A · ${otTxt()} · ${ses.testId || ""}&R&"Aptos,Regular"&8&K86868B&P / &N`)}</oddFooter></headerFooter>`;
   sheets.forEach((sh, si) => {
+    const n = si + 1, rels = [];
     const cols = sh.widths ? `<cols>${sh.widths.map((w, i) => `<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join("")}</cols>` : "";
-    const rows = sh.rows.map((r, ri) => `<row r="${ri+1}">${(r || []).map((c, ci) => {
+    const rows = sh.rows.map((r, ri) => { const ht = sh.heights && sh.heights[ri];
+      return `<row r="${ri+1}"${ht ? ` ht="${ht}" customHeight="1"` : ""}>${(r || []).map((c, ci) => {
       if (c == null || c === "") return "";
       const o = typeof c === "object" ? c : { v:c }, ref = colName(ci) + (ri+1), st = o.s ? ` s="${o.s}"` : "";
+      if (o.f) return `<c r="${ref}" t="str"${st}><f>${xesc(o.f)}</f><v>${xesc(o.v || "")}</v></c>`;
       if (typeof o.v === "number" && isFinite(o.v)) return `<c r="${ref}"${st}><v>${Number(o.v.toPrecision(12))}</v></c>`;
       if (o.v == null || o.v === "") return o.s ? `<c r="${ref}"${st}/>` : "";
-      return `<c r="${ref}" t="inlineStr"${st}><is><t xml:space="preserve">${xesc(o.v)}</t></is></c>`; }).join("")}</row>`).join("");
-    zip.file(`xl/worksheets/sheet${si+1}.xml`, `${X}<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${cols}<sheetData>${rows}</sheetData></worksheet>`);
+      return `<c r="${ref}" t="inlineStr"${st}><is><t xml:space="preserve">${xesc(o.v)}</t></is></c>`; }).join("")}</row>`; }).join("");
+    const pane = sh.freeze ? `<pane ySplit="${sh.freeze}" topLeftCell="A${sh.freeze+1}" activePane="bottomLeft" state="frozen"/>` : "";
+    const view = `<sheetViews><sheetView showGridLines="0" ${si === 0 ? 'tabSelected="1" ' : ""}workbookViewId="0">${pane}</sheetView></sheetViews>`;
+    const pr = `<sheetPr>${sh.tab ? `<tabColor rgb="FF${sh.tab}"/>` : ""}<pageSetUpPr fitToPage="1"/></sheetPr>`;
+    let drawing = "", tp = "";
+    if (sh.logo && logo) { rels.push(`<Relationship Id="rIdD" Type="${R}/drawing" Target="../drawings/drawing${n}.xml"/>`); drawing = `<drawing r:id="rIdD"/>`;
+      ct.push(`<Override PartName="/xl/drawings/drawing${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`);
+      const E = 9525 * 46;
+      zip.file(`xl/drawings/drawing${n}.xml`, `${X}<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${R}"><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>76200</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>38100</xdr:rowOff></xdr:from><xdr:ext cx="${E}" cy="${E}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="2" name="Ariadna" descr="Ariadna"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rIdL"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${E}" cy="${E}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>`);
+      zip.file(`xl/drawings/_rels/drawing${n}.xml.rels`, `${X}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdL" Type="${R}/image" Target="../media/logo.png"/></Relationships>`); }
+    if (sh.table) { const at = sh.tableAt || 0, hdr = sh.rows[at], last = Math.max(sh.rows.length, at + 2), ref = `A${at+1}:${colName(hdr.length - 1)}${last}`;
+      ct.push(`<Override PartName="/xl/tables/table${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>`);
+      zip.file(`xl/tables/table${n}.xml`, `${X}<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="${n}" name="${sh.table}" displayName="${sh.table}" ref="${ref}" headerRowCount="1"><autoFilter ref="${ref}"/><tableColumns count="${hdr.length}">${hdr.map((h, i) => `<tableColumn id="${i+1}" name="${xesc(typeof h === "object" ? h.v : h)}"/>`).join("")}</tableColumns><tableStyleInfo name="TableStyleLight1" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>`);
+      rels.push(`<Relationship Id="rIdT" Type="${R}/table" Target="../tables/table${n}.xml"/>`); tp = `<tableParts count="1"><tablePart r:id="rIdT"/></tableParts>`; }
+    if (rels.length) zip.file(`xl/worksheets/_rels/sheet${n}.xml.rels`, `${X}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join("")}</Relationships>`);
+    ct.push(`<Override PartName="/xl/worksheets/sheet${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`);
+    zip.file(`xl/worksheets/sheet${n}.xml`, `${X}<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${R}">${pr}${view}<sheetFormatPr defaultRowHeight="17" customHeight="1"/>${cols}<sheetData>${rows}</sheetData>${sh.merges && sh.merges.length ? `<mergeCells count="${sh.merges.length}">${sh.merges.map(m => `<mergeCell ref="${m}"/>`).join("")}</mergeCells>` : ""}<pageMargins left="0.5" right="0.5" top="0.75" bottom="0.6" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="${sh.portrait ? "portrait" : "landscape"}" fitToWidth="1" fitToHeight="0"/>${hf}${drawing}${tp}</worksheet>`);
   });
+  zip.file("[Content_Types].xml", `${X}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">${ct.join("")}</Types>`);
   return zip.generateAsync({ type:"blob", mimeType:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 }
+/* Cabecera de marca para cada hoja: Ariadna · título / AGQ Labs | Life Services · OT · ensayo. */
+const otTxt = () => { const w = (S.session && S.session.workCode) || ""; return /^OT/i.test(w) ? w : "OT " + w; };
+const brandRows = t => [[{ v:"Ariadna · " + t, s:5 }], [{ v:`AGQ Labs | Life Services   ·   ${otTxt()}   ·   ${S.session.testId}`, s:9 }], []];
 const xn = v => { const n = typeof v === "number" ? v : num(v); return isFinite(n) ? n : ""; };
 const fdate = iso => iso ? `${iso.slice(8,10)}/${iso.slice(5,7)}/${iso.slice(0,4)}` : "";
 /* Código de cada preparación de muestra: la doble y la fortificada llevan sufijo para distinguirlas en la hoja. */
@@ -3097,7 +3159,7 @@ function datosPrimariosSheets(){
   const ses = S.session, cfg = ses.cfg, an = S.analisis, rows = [], H = v => ({ v, s:3 }), SEC = v => [{ v, s:2 }, { v:"", s:2 }, { v:"", s:2 }, { v:"", s:2 }, { v:"", s:2 }, { v:"", s:2 }];
   const eqIny = an && an.eq ? Object.values(an.eq.asign).map(id => equipById(id)).filter(Boolean) : [];
   const kv = (k, v) => rows.push([{ v:k, s:1 }, v]);
-  rows.push([{ v:"Ariadna · Hoja de datos primarios", s:5 }]); rows.push([]);
+  rows.push([{ v:"Ariadna · Hoja de datos primarios", s:5 }]); rows.push([{ v:`AGQ Labs | Life Services   ·   ${otTxt()}   ·   ${ses.testId}`, s:9 }]); rows.push([]);
   rows.push(SEC("DATOS EXTRACCIÓN"));
   kv("PNT CÓDIGO:", ses.pnt); kv("PNT:", cfg.titulo); kv("TÉCNICA (PNT):", cfg.tecPnt || ""); kv("LABORATORIO:", cfg.lab || ""); kv("ACREDITACIÓN:", cfg.acred || ""); kv("ORIGEN DEL PNT:", cfg.origenPnt || ""); kv("PLANTILLA:", plantTxt(cfg)); kv("VERSIÓN ARIADNA:", APP_VERSION); kv("ACTIVO:", analitos().join(", ")); kv("ORDEN DE TRABAJO:", ses.workCode);
   kv("FECHA PREPARACIÓN:", fdate(ses.analysisDate)); kv("REALIZADO POR:", ses.operator + (ses.acompEmail ? ` (con ${ses.acompEmail}, ${ses.acompRol})` : ""));
@@ -3148,12 +3210,107 @@ function datosPrimariosSheets(){
   const br = sr.filter(x => x.it.tipoMuestra === "blanco");
   if (br.length) { rows.push(SEC("INTERFERENCIAS")); rows.push([H("Código Blanco Ext.")]); for (const { code } of br) rows.push([code]); rows.push([]); }
   rows.push(SEC("NOTAS")); rows.push([(S.notes.trim() || "Sin incidencias ni desviaciones.")]);
-  const sheets = [{ name:"Datos primarios", rows, widths:[30, 26, 26, 22, 18, 22, 16, 18, 34] }];
-  if (an && an.lista && an.lista.length) sheets.push({ name:"Lista de inyección", widths:[8, 26, 22, 30, 8],
-    rows:[[H("Pos."), H("Vial"), H("Tipo"), H("Disolución"), H("Iny.")], ...an.lista.map(r => [r.pos, r.code, r.tipo, [r.sol, r.conc].filter(Boolean).join(" · "), xn(r.iny)])] });
-  sheets.push({ name:"Trazabilidad", rows:[CSV_COLS.map(H), ...csvRows().map(r => CSV_COLS.map(c => r[c] ?? ""))] });
-  return sheets;
+  const sheets = [{ name:"Datos primarios", rows, widths:[30, 26, 26, 22, 18, 22, 16, 18, 34], heights:{0:34} }];
+  if (an && an.lista && an.lista.length) sheets.push({ name:"Lista de inyección", widths:[8, 26, 22, 30, 8], freeze:4, heights:{0:34},
+    rows:[...brandRows("Lista de inyección"), [H("Pos."), H("Vial"), H("Tipo"), H("Disolución"), H("Iny.")], ...an.lista.map(r => [r.pos, r.code, r.tipo, [r.sol, r.conc].filter(Boolean).join(" · "), xn(r.iny)])] });
+  const fi = CSV_COLS.indexOf("Foto");
+  sheets.push({ name:"Trazabilidad", freeze:4, heights:{0:34}, table:"T_Trazabilidad", tableAt:3, rows:[...brandRows("Trazabilidad completa"), CSV_COLS.map(H), ...csvRows().map(r => CSV_COLS.map((c, i) => i === fi && r[c] ? fotoLink(r[c]) : (r[c] ?? "")))] });
+  const extra = isoSheets();
+  return [extra.resumen, sheets[0], ...extra.resto, ...sheets.slice(1)];
 }
+/* ================= Hojas ISO 17025: Resumen (revisión), Muestras, Curva y QC, Equipos y materiales, Incidencias =================
+   Tablas de Excel con nombre (T_Muestras, T_Curva, T_Incidencias) y números reales, para que la hoja de procesado los lea por fórmula. */
+const relPath = pth => pth ? pth.split("/").slice(1).join("/") : "";
+const fotoLink = pth => { const r = relPath(pth); return r ? { f:`HYPERLINK("${r.replace(/"/g, "")}","${r.split("/").pop().replace(/"/g, "")}")`, v:r.split("/").pop(), s:8 } : ""; };
+const capFoto = key => S.caps[key] && S.caps[key].photoId ? fotoLink(zipPath(key)) : "";
+function incidencias(){
+  const out = [], seen = new Map();
+  const add = (at, tipo, elem, texto, antes) => { const k = tipo + "|" + texto + "|" + (antes || ""); if (seen.has(k)) { const o = seen.get(k); if (elem && !o.elem.split(", ").includes(elem)) o.elem += ", " + elem; return; }
+    const o = { at: at || "", tipo, elem: elem || "", texto: texto || "", antes: antes || "" }; seen.set(k, o); out.push(o); };
+  for (const r of csvRows()) {
+    const elem = [r.Codigo || r.Equipo_Codigo, r.Num_Preparacion ? "prep. " + r.Num_Preparacion : "", r.Num_Dilucion ? "dil. " + r.Num_Dilucion : "", r.Analito].filter(Boolean).join(" · ");
+    if (r.Estado === "ANULADO" && r.Motivo_Anulacion) add(r.Fecha_Hora_Fin || r.Fecha_Hora_Inicio, "Anulación", elem, r.Motivo_Anulacion);
+    else if (r.Registro === "CORRECCION_PUNTO") add(r.Fecha_Hora_Inicio, "Corrección", r.Codigo, r.Justificacion, (r.Observaciones || "").replace(/^Antes: /, ""));
+    else if (r.Registro === "ETAPA_AÑADIDA") add(r.Fecha_Hora_Inicio, "Etapa añadida", "", r.Justificacion);
+    else if (r.Registro === "DESVIACION_EQUIPO") add(r.Fecha_Hora_Inicio, "Equipo no conforme", r.Equipo_Codigo, r.Nota_Verificacion);
+    else if (r.En_Caducidad === "NO") add(r.Fecha_Hora_Fin, "Fuera de caducidad", r.Codigo, r.Justificacion);
+    else if (r.Registro === "PATRON_NO_DISPONIBLE") add(r.Fecha_Hora_Inicio, "Patrón no disponible", r.Analito + " · " + r.Uso_Patron, r.Justificacion);
+    else if (r.Registro === "CONTROLES_INCOMPLETOS") add(r.Fecha_Hora_Inicio, "Controles incompletos", r.Observaciones, r.Justificacion);
+    else if (r.Estado === "NO_REALIZADA") add(r.Fecha_Hora_Fin, "No realizada", elem, r.Justificacion);
+    else if (r.Estado !== "ANULADO" && r.Justificacion) for (const j of String(r.Justificacion).split(" | ").filter(Boolean)) add(r.Fecha_Hora_Fin || r.Fecha_Hora_Inicio, "Desviación justificada", elem, j);
+  }
+  if (S.notes.trim()) add(S.finishedAt, "Nota del analista", "", S.notes.trim().replace(/\r?\n/g, " | "));
+  return out;
+}
+function isoSheets(){
+  const ses = S.session, H = v => ({ v, s:3 }), K = v => ({ v, s:1 }), B = v => ({ v: v ?? "", s:4 });
+  const inc = incidencias(), cnt = t => inc.filter(x => x.tipo === t).length;
+  const nAn = cnt("Anulación"), nCo = cnt("Corrección"), nDe = inc.length - nAn - nCo - cnt("Nota del analista");
+  const R = [], hts = {}, mg = [], row = (r, h) => { R.push(r); if (h) hts[R.length - 1] = h; return R.length; };
+  const span = (r, c1, c2) => mg.push(`${colName(c1)}${r}:${colName(c2)}${r}`);
+  const full = (cell, h, st2) => { const n = row(["", cell, { v:"", s:st2 ?? cell.s }, { v:"", s:st2 ?? cell.s }, { v:"", s:st2 ?? cell.s }], h); span(n, 1, 4); return n; };
+  const sec = t => row(["", { v:t, s:2 }, { v:"", s:2 }, { v:"", s:2 }, { v:"", s:2 }], 30);
+  const tiles = list => { row(["", ...list.map(([n, , warn]) => ({ v:n, s: warn ? 15 : 14 }))], 40); row(["", ...list.map(([, l]) => ({ v:l, s:16 }))], 18); };
+  row(["", { v:"Ariadna", s:5 }], 36); row(["", { v:"AGQ Labs | Life Services", s:9 }], 16);
+  row(["", { v:"", s:17 }, { v:"", s:17 }, { v:"", s:17 }, { v:"", s:17 }], 8); row([], 18);
+  full({ v:`${ses.pnt} · ${ses.cfg.titulo || ""}`, s:13 }, 24);
+  full({ v:`${otTxt()}   ·   ${ses.testId}   ·   análisis ${fdate(ses.analysisDate)}`, s:9 }, 16); row([], 14);
+  tiles([[liveItems("muestra").length, "Muestras"], [liveItems("reactivo").length, "Reactivos"], [liveItems("patron").length, "Patrones"], [S.equips.length, "Equipos"]]);
+  row([], 10); sec("Incidencias");
+  tiles([[nDe, "Desviaciones", nDe > 0], [nCo, "Correcciones", nCo > 0], [nAn, "Anulaciones", nAn > 0], [inc.length, "Total", inc.length > 0]]);
+  row([], 6);
+  const st = inc.length ? 7 : 6; full({ v: inc.length ? `Revisar la hoja «Incidencias» (${inc.length})` : "Sin incidencias · revisión directa", s:st }, 28);
+  row([], 10); sec("Datos del ensayo");
+  const kv = (k, v) => { const n = row(["", K(k), { v, s:11 }, { v:"", s:11 }, { v:"", s:11 }], 19); span(n, 2, 4); };
+  kv("Analista", ses.operator + (ses.acompEmail ? ` (con ${ses.acompEmail}, ${ses.acompRol})` : "")); kv("Situación en el PNT", ses.formacion ? FORMACION[ses.formacion].lbl : "");
+  kv("Inicio", human(ses.startedAt)); kv("Fin", S.finishedAt ? human(S.finishedAt) : "sin finalizar"); kv("Plantilla del PNT", plantTxt(ses.cfg)); kv("Versión de Ariadna", APP_VERSION);
+  row([], 10); sec("Revisión · ISO/IEC 17025, 7.5.1");
+  for (const k of ["Revisado por", "Fecha", "Resultado", "Firma"]) { const n = row(["", K(k), B(""), B(""), B("")], 28); span(n, 2, 4); }
+  row([], 16); full({ v:"Datos primarios originales: las fotos de la carpeta y sus huellas en SHA256SUMS.txt. Detalle completo en «Trazabilidad» y en el registro HTML del ensayo.", s:18 }, 30);
+  row([], 8); full({ v:"Como el hilo de Ariadna: cada dato conserva su camino hasta el origen.", s:10 }, 18);
+  const resumen = { name:"Resumen", rows:R, widths:[9, 24, 24, 24, 24], logo:true, portrait:true, tab:"12224A", heights:hts, merges:mg };
+
+  const M = [...brandRows("Muestras"), ["Vial","Muestra","Tipo","Naturaleza","Masa (g)","Unidades","Vol. extracción (mL)","Vol. tomado (mL)","FD acumulado","Balanza","Fecha y hora","Foto de la masa"].map(H)];
+  for (const { it, p, code, tipo } of sampleRows()) { const ch = chain(it, p);
+    M.push([code, it.code, tipo, subLbl(it.submatriz) === "—" ? "" : subLbl(it.submatriz), p.modo === "masa" ? xn(massG(p)) : "", xn(p.uds), p.modo !== "directo" ? xn(p.volFinal) : "", p.modo === "volumen" ? xn(mlOf(p.volTomado, p.volTomadoU)) : "",
+      xn(ch.fdAcum), (eqUsoOf(p.eq, measBases(p), p) || {}).code || "", human(p.finishedAt), p.modo === "masa" ? capFoto(p.masaCap) : ""]); }
+  const C = [...brandRows("Curva de calibración y QC"), ["Punto","Tipo","Analito","Alícuota (mL)","Vol. final (mL)","Conc. (mg/mL)","Conc. (µg/mL)","Disolución de origen","Conc. origen (mg/mL)","Pipeta","Equivale a","Preparado","Correcciones"].map(H)];
+  if (S.curva && PCFG().calib && !S.na.patron) for (const [list, kind] of [["niveles","cal"],["qcs","qc"]]) for (const L of liveLv(list)) for (const a of lvAns(L)) {
+    const so = solById(srcObj(kind + "|" + a).src), c = ptConc(L, a, kind);
+    C.push([L.n, kind === "cal" ? "CAL" : "QC", a, xn(mlOf(L.alic[a], S.curva.alicU)), xn(L.vf), xn(c), c == null ? "" : xn(c * 1000), so ? so.label : "", so ? xn(so.C) : "", (eqUsoOf(S.curva.eq, ["pipeta"], L) || {}).code || "", L.ref || "", human(L.hecho), (L.correc || []).length || ""]); }
+  const E = [...brandRows("Equipos y materiales"), [{ v:"Equipos", s:2 }, { v:"", s:2 }, { v:"", s:2 }, { v:"", s:2 }], [H("Código"), H("Tipo"), H("Comprobación"), H("Hora")]];
+  for (const e of S.equips) E.push([e.code, e.tipo === "otro" && e.nombre ? e.nombre : EQUIPOS[e.tipo].nombre, EQUIPOS[e.tipo].verif ? (e.verif === "si" ? "Conforme" : e.verif === "no" ? "No conforme: " + e.verifNota : "sin responder") : "—", human(e.at)]);
+  E.push([]); E.push(Array.from({ length:13 }, (_, i) => ({ v: i ? "" : "Reactivos y patrones", s:2 })));
+  E.push(["Tipo","Código","Nombre","Analito","Uso","Caducidad","Origen","Ref. origen","Preparado el","Modo","Pureza (%)","Concentración","Unidad"].map(H));
+  for (const k of ["reactivo","patron"]) for (const it of liveItems(k)) { const p = validPreps(it)[0], pc = p ? prepCalc(it, p) : {};
+    E.push([k === "reactivo" ? "Reactivo" : "Patrón", it.code, it.nombre || "", it.analito || "", it.uso ? usoLbl(it.uso) : "", it.cad === "si" ? "En vigor" : it.cad === "no" ? "Caducado: " + (it.cadNota || "") : "",
+      p && p.modo === "directo" ? (p.origen === "com" ? "Comercial" : p.origen === "lab" ? "Preparado otro día" : "") : p ? "Preparado hoy" : "", p && p.origen === "lab" ? p.origRef : "", p && p.origen === "lab" ? fdate(p.origFecha) : "",
+      p ? (p.modo === "masa" ? "Pesada" : p.modo === "volumen" ? "Volumen" : "Listo para usar") : "", p && p.modo === "masa" ? xn(p.pureza) : "", xn(pc.C), pc.unit || ""]); }
+  const I = [...brandRows("Incidencias"), ["Fecha y hora","Tipo","Elemento","Motivo o descripción","Valor anterior","Analista","Valorado por (revisor)","Conforme"].map(H)];
+  for (const x of inc) I.push([human(x.at), x.tipo, x.elem, { v:x.texto, s:12 }, { v:x.antes, s:12 }, ses.operator, "", ""]);
+  return { resumen, resto: [
+    { name:"Muestras", rows:M, table:"T_Muestras", tableAt:3, freeze:4, widths:[22, 18, 18, 18, 11, 10, 19, 16, 13, 16, 17, 30], heights:{0:34, 3:22} },
+    { name:"Curva y QC", rows:C, table:"T_Curva", tableAt:3, freeze:4, widths:[14, 7, 16, 13, 14, 13, 13, 22, 20, 16, 11, 17, 13], heights:{0:34, 3:22} },
+    { name:"Equipos y materiales", rows:E, heights:{0:34}, widths:[14, 22, 30, 16, 22, 26, 18, 18, 13, 14, 11, 14, 10] },
+    { name:"Incidencias", rows:I, table:"T_Incidencias", tableAt:3, freeze:4, tab: inc.length ? "D9A23A" : "", widths:[17, 22, 26, 60, 40, 26, 22, 11], heights:{0:34, 3:22} }] };
+}
+/* ================= Registro.html: la misma vista del registro, sin conexión, con las fotos de la carpeta ================= */
+function registroDoc(){
+  const box = document.createElement("div"); box.innerHTML = regHTML();
+  box.querySelectorAll("button, .reg-acts, .linkbtns").forEach(e => e.remove());
+  const first = box.querySelector(".notice.info"); if (first) first.remove();
+  box.querySelectorAll("img[data-cap]").forEach(img => { const k = img.dataset.cap, r = S.caps[k] && S.caps[k].photoId ? relPath(zipPath(k)) : "";
+    if (!r) { img.remove(); return; } img.setAttribute("src", r); const a = document.createElement("a"); a.href = r; a.target = "_blank"; img.replaceWith(a); a.appendChild(img); });
+  box.querySelectorAll("[data-act],[data-photo],[data-cap],[data-item],[data-prep]").forEach(e => ["data-act","data-photo","data-cap","data-item","data-prep"].forEach(x => e.removeAttribute(x)));
+  const css = [...document.querySelectorAll("style")].map(x => x.textContent).join("\n"), ses = S.session;
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Registro ${esc(ses.testId)}</title><style>${css}
+body{max-width:820px;margin:0 auto;padding:16px;background:var(--bg,#fff)} .thumb{cursor:zoom-in} @media print{a[href]{text-decoration:none}}</style></head><body>
+<div class="eyebrow">Ariadna · Registro del ensayo</div><h1 style="margin:4px 0 6px">${esc(ses.pnt)} · OT ${esc(ses.workCode)}</h1>
+<p class="lead">Ensayo ${esc(ses.testId)} · ${esc(ses.operator)} · análisis ${esc(fdate(ses.analysisDate))} · ${S.finishedAt ? "finalizado " + esc(human(S.finishedAt)) : "sin finalizar"} · Ariadna ${esc(APP_VERSION)}</p>
+<div class="notice info">Copia de lectura generada al preparar la carpeta. Lo anulado se conserva con su motivo. Toca una foto para verla completa.</div>
+<div class="stack">${box.innerHTML}</div></body></html>`;
+}
+const regName = () => `${S.session.testId}_registro.html`;
 const xlsxName = () => `${safe(S.session.workCode)}_${S.session.testId}_datos_primarios.xlsx`;
 async function downloadXlsx(){ try { await saveFile(xlsxName(), await xlsxBlob(datosPrimariosSheets())); } catch(e) { toast("No se pudo generar el Excel: " + (e.message || e)); } }
 /* ================= Carpeta final del ensayo (para SharePoint) =================
@@ -3167,14 +3324,15 @@ async function buildCarpeta(){
     const pth = zipPath(key); zip.file(pth, b); fotos[c.photoId] = pth; n++; sums.push(`${c.hash}  ${pth.split("/").slice(1).join("/")}`);
   }
   const xl = await xlsxBlob(datosPrimariosSheets()), csv = buildCSV();
-  zip.file(`${root}/${xlsxName()}`, xl); zip.file(`${root}/${S.csvName}`, csv);
-  sums.push(`${await sha256(xl)}  ${xlsxName()}`, `${await sha256(new Blob([csv]))}  ${S.csvName}`);
+  const reg = new Blob([registroDoc()], { type:"text/html" });
+  zip.file(`${root}/${xlsxName()}`, xl); zip.file(`${root}/${S.csvName}`, csv); zip.file(`${root}/${regName()}`, reg);
+  sums.push(`${await sha256(xl)}  ${xlsxName()}`, `${await sha256(new Blob([csv]))}  ${S.csvName}`, `${await sha256(reg)}  ${regName()}`);
   zip.file(`${root}/SHA256SUMS.txt`, sums.join("\n") + "\n");
   const pl = plantGet(S.session.pnt);
   if (pl) zip.file(`${root}/_ariadna/PLANTILLA_${safe(pl.codigo)}.json`, JSON.stringify({ tipo:"ariadna-plantilla", v:1, exportada:isoLocal(), cfg:pl }, null, 1));
   zip.file(`${root}/_ariadna/copia.json`, JSON.stringify({ tipo:"agq-cuaderno-copia", v:2, slot:SLOT, creada:isoLocal(), fotosEn:fotos, state: JSON.parse(stateJSON()) }));
   zip.file(`${root}/LEEME.txt`, `Ensayo ${S.session.testId} · ${S.session.pnt} · OT ${S.session.workCode}\r\nAnalista: ${S.session.operator}\r\nPlantilla: ${plantTxt(S.session.cfg)}\r\nAriadna ${APP_VERSION}\r\nFinalizado: ${human(S.finishedAt)}\r\n\r\n` +
-    `- ${xlsxName()}: hoja de datos primarios (bloques en el orden de los formatos de procesado).\r\n- ${S.csvName}: registro completo de trazabilidad.\r\n- Carpetas 0_Equipos, 1_Reactivos, 2_Patrones, 3_Muestras: fotos (datos primarios).\r\n- SHA256SUMS.txt: huella de cada archivo para comprobar que no se ha modificado.\r\n- _ariadna/copia.json: copia restaurable en Ariadna («Sesión» › «Restaurar una copia»).\r\n`);
+    `- ${xlsxName()}: Resumen para la revisión, hoja de datos primarios (bloques en el orden de los formatos de procesado), Muestras, Curva y QC, Equipos y materiales, Incidencias y Trazabilidad.\r\n- ${regName()}: el registro del ensayo tal como se ve en Ariadna (se abre en cualquier navegador, sin conexión).\r\n- ${S.csvName}: registro completo de trazabilidad.\r\n- Carpetas 0_Equipos, 1_Reactivos, 2_Patrones, 3_Muestras: fotos (datos primarios).\r\n- SHA256SUMS.txt: huella de cada archivo para comprobar que no se ha modificado.\r\n- _ariadna/copia.json: copia restaurable en Ariadna («Sesión» › «Restaurar una copia»).\r\n`);
   const blob = await zip.generateAsync({ type:"blob", compression:"STORE", mimeType:"application/zip" });
   CARPETA = { slot:SLOT, testId:S.session.testId, name:S.zipName, blob, size:blob.size, n, sha: await sha256(blob), at:isoLocal() };
   return CARPETA;
@@ -3200,7 +3358,7 @@ function entregaHTML(){
   const ses = S.session, ent = S.entregas || [], last = ent[ent.length - 1], ready = carpetaLista(), share = canShareFiles();
   const step = (n, t, body, ok) => `<div class="card"><div class="card-head"><h2>${n}. ${esc(t)}</h2><span class="chip ${ok ? "ok" : ""}">${ok ? "Hecho" : "Pendiente"}</span></div>${body}</div>`;
   return `<h2 style="margin-top:6px">Entrega y cierre</h2>
-    ${step(1, "Guardar la carpeta del ensayo", `<span class="hint">Una carpeta .zip con las fotos, el Excel de datos primarios, el CSV, las huellas SHA-256 y una copia restaurable del ensayo.</span>
+    ${step(1, "Guardar la carpeta del ensayo", `<span class="hint">Una carpeta .zip con las fotos, el Excel de datos primarios, el registro, el CSV, las huellas SHA-256 y una copia restaurable del ensayo.</span>
       ${!ready ? `<button type="button" class="b-pri w100" data-act="carpeta-prep">Preparar la carpeta</button>`
         : `<div class="calc"><span class="k">Carpeta lista</span><span class="v mono" style="font-size:15px;word-break:break-all">${esc(CARPETA.name)}</span><span class="f">${CARPETA.n} fotos + Excel + CSV · ${esc(kb(CARPETA.size))}</span></div>
           ${share ? `<button type="button" class="b-pri w100" data-act="carpeta-share">Compartir / guardar en… (OneDrive, SharePoint, Teams, Archivos)</button>` : ""}
@@ -3222,7 +3380,7 @@ async function downloadZip(btn){
     }
     const root = safe(S.session.workCode);
     zip.file(`${root}/${S.csvName}`, buildCSV());
-    zip.file(`${root}/${xlsxName()}`, await xlsxBlob(datosPrimariosSheets()));
+    zip.file(`${root}/${xlsxName()}`, await xlsxBlob(datosPrimariosSheets())); zip.file(`${root}/${regName()}`, registroDoc());
     zip.file(`${root}/SHA256SUMS.txt`, sums.join("\n") + "\n");
     const blob = await zip.generateAsync({ type:"blob", compression:"STORE" });
     await saveFile(S.zipName, blob);
