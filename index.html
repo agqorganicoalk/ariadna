@@ -166,6 +166,7 @@ select:focus-visible,input:focus-visible,textarea:focus-visible,button:focus-vis
 .cam input{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer}
 .cam svg{width:22px;height:22px;flex:none}
 .shot{display:grid;grid-template-columns:88px 1fr;gap:12px;align-items:start}
+.roi-wrap{text-align:center}.roi{position:relative;display:inline-block;max-width:100%;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;border-radius:8px;cursor:crosshair}.roi img{display:block;max-width:100%;max-height:58vh;pointer-events:none}.roi-r{position:absolute;border:3px solid #639C4F;border-radius:4px;box-shadow:0 0 0 9999px rgba(0,0,0,.45);pointer-events:none}
 .shot img,.thumb{width:88px;height:88px;object-fit:cover;border-radius:8px;border:1px solid var(--line);background:var(--sunken);cursor:zoom-in}
 .shot .meta{font-family:var(--font-data);font-size:11.5px;color:var(--muted);display:grid;gap:2px;min-width:0;word-break:break-all}
 .ocr{display:flex;align-items:center;gap:10px;background:var(--brand-soft);color:var(--brand);border-radius:8px;padding:10px 12px;font-weight:600;font-size:14px}
@@ -295,7 +296,7 @@ button:disabled{cursor:not-allowed}
 "use strict";
 
 /* ================= Configuración ================= */
-const APP_VERSION = "1.0-piloto · 03/10/2026";
+const APP_VERSION = "1.0-piloto · 06/10/2026";
 const DOMINIO = "agqlabs.com";
 const FORMACION = {
   formado:      { lbl:"Formado en el PNT",              acomp:false },
@@ -904,7 +905,7 @@ function capDef(key){
   if (kind === "masa") { const p = prepById(it, sub), u = (S.caps[key] && S.caps[key].unit) || "g"; return { titulo:"Lectura de balanza", boton:"Fotografiar la balanza", campo:"Masa pesada", kind:"number", unidad:u, units:["g","mg"], min:0, minExcl:true, max: u === "mg" ? 1000000 : 1000, tipo:`BALANZA_P${p ? p.n : ""}`, ayuda:"Encuadra solo el display, de frente y con la lectura estable." }; }
   if (kind === "ph") { const x = phById(it, sub); return { titulo:"Lectura de pH-metro", boton:"Fotografiar el pH-metro", campo:"Lectura de pH", kind:"number", unidad:"pH", min:0, max:14, tipo:`PH_L${x ? x.n : ""}`, ayuda:"Encuadra solo la cifra de pH cuando el equipo indique lectura estable." }; }
 }
-const blankCap = () => ({ photoId:"", fname:"", size:0, hash:"", capturedAt:"", ocrRaw:"", ocrCand:"", ocrConf:null, engine:"", ocrError:"", value:"", validated:false, reading:false, prog:0, progLabel:"" });
+const blankCap = () => ({ roi:null, photoId:"", fname:"", size:0, hash:"", capturedAt:"", ocrRaw:"", ocrCand:"", ocrConf:null, engine:"", ocrError:"", value:"", validated:false, reading:false, prog:0, progLabel:"" });
 function ensureCap(key){ if (!S.caps[key]) { S.caps[key] = blankCap(); if (key.startsWith("masa:")) { const it = itemById(key.split(":")[1]); S.caps[key].unit = (S.unitPref && (S.unitPref["masa:" + (it ? it.tanda : "")] || (it && it.tanda !== "muestra" && S.unitPref.masa))) || "g"; } } return S.caps[key]; }
 function unitSel(units, cur, attrs){ return `<span class="useg" role="group" aria-label="Unidad">${units.map(u => `<button type="button" ${attrs} data-v="${u}" aria-pressed="${cur === u}">${u}</button>`).join("")}</span>`; }
 const capId = key => "cap-" + key.replace(/[^a-z0-9]/gi, "_");
@@ -984,9 +985,10 @@ async function paintCap(key){
     inp.classList.toggle("err", !!err); P("valerr").hidden = !err; P("valerr").textContent = err;
     const edited = c.ocrCand && c.value !== c.ocrCand;
     const by = c.engine === "claude" ? "Claude" : c.engine === "barcode" ? `código de barras${c.barFormat ? " " + c.barFormat.replace(/_/g, " ") : ""}` : "OCR local";
-    P("valhint").textContent = !c.ocrCand ? "Entrada manual." : edited ? `Corregido a mano (${by} leyó «${c.ocrCand}»).` : `Leído por ${by}${c.ocrConf != null ? ` · confianza ${Math.round(c.ocrConf)} %` : ""}. Corrígelo si no coincide.`;
+    P("valhint").textContent = (c.roi && c.ocrCand ? "Zona marcada · " : "") + (!c.ocrCand ? "Entrada manual." : edited ? `Corregido a mano (${by} leyó «${c.ocrCand}»).` : `Leído por ${by}${c.ocrConf != null ? ` · confianza ${Math.round(c.ocrConf)} %` : ""}. Corrígelo si no coincide.`);
     P("raw").hidden = !c.ocrRaw; P("rawpre").textContent = c.ocrRaw;
     P("reocr").innerHTML = locked ? "" :
+      `<button type="button" data-act="roi-open" data-cap="${esc(key)}">Marcar la zona y volver a leer</button>` +
       `<button type="button" data-act="reocr" data-engine="local" data-cap="${esc(key)}">Leer con OCR local</button>` +
       (CLAUDE.vision ? `<button type="button" data-act="reocr" data-engine="claude" data-cap="${esc(key)}">Leer con Claude</button>` : "") +
       (c.ocrError ? `<button type="button" data-act="diag">Ver diagnóstico</button>` : "");
@@ -1010,11 +1012,40 @@ async function onPhoto(key, file){
     fname:`${safe(S.session.workCode)}_${capPrefix(key)}${d.tipo}_${stamp(now)}.${ext}` });
   save(); paintCap(key); live();
   sha256(file).then(h => { c.hash = h; save(); paintCap(key); });
-  readCap(key, S.engine);
+  openRoi(key);
+}
+/* Zona de lectura: el analista enmarca el valor; la foto se guarda entera y solo se lee la zona. */
+const roiKind = key => key.split(":")[0];
+let ROI = null;
+async function openRoi(key){
+  const c = S.caps[key], d = capDef(key); if (!c || !c.photoId) return;
+  const u = await photoURL(c.photoId); S.roiLast = S.roiLast || {};
+  ROI = { key, r: { ...(c.roi || S.roiLast[roiKind(key)] || { x:.15, y:.3, w:.7, h:.4 }) } };
+  openSheet({ title:"Marca dónde está el valor", full:true, body:`<span class="hint">Arrastra el dedo sobre la foto para enmarcar solo ${d.kind === "number" ? "la cifra de la pantalla" : "el código o la etiqueta"}, sin fechas ni otros textos. La foto se guarda entera.</span>
+    <div class="roi-wrap"><div class="roi" id="roi-box"><img src="${u}" alt="Foto para marcar la zona de lectura" draggable="false"><div class="roi-r" id="roi-r"></div></div></div>
+    <div class="btns"><button type="button" class="b-sec back" data-act="roi-full">Leer la foto entera</button><button type="button" class="b-pri" data-act="roi-read">Leer la zona marcada</button></div>` });
+  const box = $("#roi-box"), rr = $("#roi-r"); if (!box) return;
+  const sh = $(".sheet"); if (sh) sh.style.alignContent = "start";
+  const cl = v => Math.max(0, Math.min(1, v));
+  const paint = () => { const r = ROI.r; Object.assign(rr.style, { left: r.x*100 + "%", top: r.y*100 + "%", width: r.w*100 + "%", height: r.h*100 + "%" }); };
+  paint(); let st = null, prev = null;
+  const pos = e => { const b = box.getBoundingClientRect(); return { x: cl((e.clientX - b.left) / b.width), y: cl((e.clientY - b.top) / b.height) }; };
+  box.addEventListener("pointerdown", e => { st = pos(e); prev = { ...ROI.r }; try { box.setPointerCapture(e.pointerId); } catch(_) {} e.preventDefault(); });
+  box.addEventListener("pointermove", e => { if (!st) return; const q = pos(e); ROI.r = { x: Math.min(st.x, q.x), y: Math.min(st.y, q.y), w: Math.abs(q.x - st.x), h: Math.abs(q.y - st.y) }; paint(); });
+  const end = () => { if (!st) return; st = null; if (ROI.r.w < .04 || ROI.r.h < .03) { ROI.r = prev; paint(); } };
+  box.addEventListener("pointerup", end); box.addEventListener("pointercancel", end);
+}
+async function cropBlob(blob, r){
+  const src = await loadBitmap(blob), W = src.width, H = src.height, m = 0.015;
+  const x = Math.max(0, r.x - m) * W, y = Math.max(0, r.y - m) * H, w = Math.min(1, r.x + r.w + m) * W - x, h = Math.min(1, r.y + r.h + m) * H - y;
+  const cv = document.createElement("canvas"); cv.width = Math.max(1, Math.round(w)); cv.height = Math.max(1, Math.round(h));
+  cv.getContext("2d").drawImage(src, x, y, w, h, 0, 0, cv.width, cv.height);
+  return await new Promise((res, rej) => cv.toBlob(b => b ? res(b) : rej(new Error("recorte")), "image/jpeg", 0.95));
 }
 async function readCap(key, engine){
   const c = S.caps[key]; const d = capDef(key);
-  const blob = await photoBlob(c.photoId); if (!blob) return;
+  const full = await photoBlob(c.photoId); if (!full) return;
+  const blob = c.roi ? await cropBlob(full, c.roi).catch(() => full) : full;
   const token = uid(); c.readToken = token;
   Object.assign(c, { reading:true, prog:0, progLabel: engine === "claude" ? "Leyendo con Claude…" : "Cargando OCR…", ocrError:"" });
   paintCap(key); live();
@@ -1161,7 +1192,7 @@ async function loadBitmap(blob){
 // Escala, pasa a gris y estira el contraste; en displays oscuros invierte para texto oscuro sobre claro.
 async function prepImage(blob, kind, maxSide){
   const src = await loadBitmap(blob);
-  const k = Math.min(1, maxSide / Math.max(src.width, src.height));
+  const k = Math.min(kind === "photo" ? 1 : 2.5, maxSide / Math.max(src.width, src.height));
   const cv = document.createElement("canvas"); cv.width = Math.round(src.width*k); cv.height = Math.round(src.height*k);
   const ctx = cv.getContext("2d", { willReadFrequently:true }); ctx.drawImage(src, 0, 0, cv.width, cv.height);
   if (kind === "photo") return cv;
@@ -1255,6 +1286,9 @@ function closeSheet(){ $("#sheet-root").innerHTML = ""; SHEET = null; document.b
 
 /* ================= Equipos ================= */
 const equipById = id => S.equips.find(e => e.id === id);
+/* Un hueco de equipo puede ser "pipeta" o "pipeta~2" (segunda pipeta de la misma etapa). */
+const eqBase = t => String(t).split("~")[0];
+const eqDef = t => { const b = eqBase(t), n = String(t).split("~")[1], E = EQUIPOS[b] || EQUIPOS.otro; return n ? { ...E, nombre: `${E.nombre} (${n}.ª)` } : E; };
 function eqResolve(stageKey){
   const [k, a, b, c] = stageKey.split(":");
   if (k === "curva") return { obj:S.curva, kindKey:"curva", etapa:"CURVA" };
@@ -1288,11 +1322,11 @@ function eqInit(stageKey){
 }
 function eqError(stageKey){
   const eq = eqResolve(stageKey).obj.eq; if (!eq) return "Indica los equipos.";
-  for (const t of eqRequired(stageKey)) if (!eq.tipos.includes(t)) return `Falta ${EQUIPOS[t].nombre.toLowerCase()}.`;
+  for (const t of eqRequired(stageKey)) if (!eq.tipos.includes(t)) return `Falta ${eqDef(t).nombre.toLowerCase()}.`;
   for (const t of eq.tipos) {
     const e = equipById(eq.asign[t]);
-    if (!e) return `Escanea o elige: ${EQUIPOS[t].nombre}.`;
-    if (EQUIPOS[t].verif && !e.verif) return `Responde la comprobación de ${e.code}.`;
+    if (!e) return `Escanea o elige: ${eqDef(t).nombre}.`;
+    if (eqDef(t).verif && !e.verif) return `Responde la comprobación de ${e.code}.`;
     if (e.verif === "no" && (e.verifNota || "").trim().length < 5) return `Describe la desviación de ${e.code}.`;
   }
   return "";
@@ -1300,23 +1334,25 @@ function eqError(stageKey){
 const eqLabel = e => `${e.tipo === "otro" && e.nombre ? e.nombre : EQUIPOS[e.tipo].nombre} ${e.code}`;
 function eqSum(eq){
   if (!eq || !eq.tipos.length) return "—";
-  return eq.tipos.map(t => { const e = equipById(eq.asign[t]); return e ? `${esc(e.tipo === "otro" && e.nombre ? e.nombre : EQUIPOS[t].nombre)} <b>${esc(e.code)}</b>${e.verif === "no" ? ' <span class="tag">desviación</span>' : ""}` : `${esc(EQUIPOS[t].nombre)} —`; }).join("<br>");
+  return eq.tipos.map(t => { const e = equipById(eq.asign[t]); return e ? `${esc(e.tipo === "otro" && e.nombre ? e.nombre : eqDef(t).nombre)} <b>${esc(e.code)}</b>${e.verif === "no" ? ' <span class="tag">desviación</span>' : ""}` : `${esc(eqDef(t).nombre)} —`; }).join("<br>");
 }
 function eqPanelHTML(stageKey, locked){
   const eq = eqInit(stageKey), sug = eqSuggested(stageKey), req = eqRequired(stageKey);
   const shown = [...new Set([...sug, ...eq.tipos])];
   const extra = Object.keys(EQUIPOS).filter(t => !shown.includes(t));
+  const nextN = b => { let n = 2; while (eq.tipos.includes(`${b}~${n}`)) n++; return `${b}~${n}`; };
+  const more = [...new Set(eq.tipos.map(eqBase))].filter(b => b !== "otro").map(nextN);
   if (locked) return `<div class="card"><div class="card-head"><h2>Equipos</h2><span class="chip ok">Confirmados ${esc(hhmm(eq.confirmedAt))}</span></div><div class="mono" style="font-size:14px">${eqSum(eq)}</div></div>`;
   return `<div class="card">
     <div class="card-head"><h2>¿Qué equipos vas a usar?</h2><span class="chip ${eqError(stageKey) ? "review" : "ok"}">${eqError(stageKey) ? "Pendiente" : "Listo"}</span></div>
     <span class="hint">Marca los equipos de esta etapa. Cada uno se identifica escaneando su etiqueta o código de barras.${eq.prefilled ? " Están propuestos los mismos de la última vez: cámbialos si usas otros." : ""}</span>
-    <div class="chips ui">${shown.map(t => `<button type="button" data-act="eq-toggle" data-stage="${esc(stageKey)}" data-tipo="${t}" aria-pressed="${eq.tipos.includes(t)}" ${req.includes(t) ? "disabled" : ""}>${esc(EQUIPOS[t].nombre)}${req.includes(t) ? " ·  obligatorio" : ""}</button>`).join("")}</div>
-    ${extra.length ? `<select data-eqadd="${esc(stageKey)}" aria-label="Añadir otro equipo"><option value="">+ Añadir otro equipo…</option>${extra.map(t => `<option value="${t}">${esc(EQUIPOS[t].nombre)}</option>`).join("")}</select>` : ""}
+    <div class="chips ui">${shown.map(t => `<button type="button" data-act="eq-toggle" data-stage="${esc(stageKey)}" data-tipo="${t}" aria-pressed="${eq.tipos.includes(t)}" ${req.includes(t) ? "disabled" : ""}>${esc(eqDef(t).nombre)}${req.includes(t) ? " ·  obligatorio" : ""}</button>`).join("")}</div>
+    ${extra.length || more.length ? `<select data-eqadd="${esc(stageKey)}" aria-label="Añadir otro equipo"><option value="">+ Añadir otro equipo…</option>${more.length ? `<optgroup label="Otra unidad del mismo tipo">${more.map(t => `<option value="${t}">Otra: ${esc(EQUIPOS[eqBase(t)].nombre)}</option>`).join("")}</optgroup>` : ""}${extra.length ? `<optgroup label="Otros equipos">${extra.map(t => `<option value="${t}">${esc(EQUIPOS[t].nombre)}</option>`).join("")}</optgroup>` : ""}</select>` : ""}
   </div>
   ${eq.tipos.map(t => eqRowHTML(stageKey, t)).join("")}`;
 }
 function eqRowHTML(stageKey, t){
-  const eq = eqResolve(stageKey).obj.eq, E = EQUIPOS[t], e = equipById(eq.asign[t]);
+  const eq = eqResolve(stageKey).obj.eq, E = eqDef(t), e = equipById(eq.asign[t]);
   const scanning = S.eqScan && S.eqScan.stage === stageKey && S.eqScan.tipo === t;
   if (e) {
     const c = S.caps[e.capKey];
@@ -1331,12 +1367,12 @@ function eqRowHTML(stageKey, t){
         ${e.verif === "no" ? `<label class="f" for="vn-${e.id}">Describe la desviación y qué haces</label><textarea id="vn-${e.id}" style="min-height:80px" data-eqnota="${e.id}" placeholder="Ej.: verificación con pesa de 100 g fuera de tolerancia; se usa la balanza BAL-04.">${esc(e.verifNota)}</textarea>` : ""}</div>` : ""}
     </div>`;
   }
-  const known = S.equips.filter(x => x.tipo === t);
+  const known = S.equips.filter(x => x.tipo === eqBase(t) && !Object.entries(eq.asign).some(([tt, id]) => tt !== t && id === x.id));
   return `<div class="card">
     <div class="card-head"><h2>${esc(E.nombre)}</h2><span class="chip review">Sin identificar</span></div>
     ${known.length && !scanning ? `<div class="field"><span class="hint">Ya identificados en este ensayo:</span><div class="chips">${known.map(k => `<button type="button" data-act="eq-use" data-stage="${esc(stageKey)}" data-tipo="${t}" data-equip="${k.id}">${esc(k.code)}</button>`).join("")}</div></div>` : ""}
     ${scanning ? `${capHTML(S.eqScan.capKey)}
-      ${t === "otro" ? `<div class="field"><label class="f" for="eqname">Nombre del equipo</label><input type="text" id="eqname" data-eqname="1" value="${esc(S.eqScan.nombre || "")}" placeholder="Ej.: Placa calefactora"></div>` : ""}
+      ${eqBase(t) === "otro" ? `<div class="field"><label class="f" for="eqname">Nombre del equipo</label><input type="text" id="eqname" data-eqname="1" value="${esc(S.eqScan.nombre || "")}" placeholder="Ej.: Placa calefactora"></div>` : ""}
       <div class="btns"><button type="button" class="b-sec back" data-act="eq-scan-cancel">Cancelar</button><button type="button" class="b-pri" data-act="eq-register" data-cap="${esc(S.eqScan.capKey)}" disabled>Usar este equipo</button></div>`
     : `<button type="button" class="b-ghost w100" data-act="eq-scan" data-stage="${esc(stageKey)}" data-tipo="${t}" ${S.eqScan ? "disabled" : ""}>Escanear ${esc(E.nombre.toLowerCase())}</button>`}
   </div>`;
@@ -1669,6 +1705,15 @@ function pntCardHTML(){
     ${locked ? "" : `<div class="linkbtns"><label class="cam secondary" style="min-height:40px;font-size:14px">Cargar plantilla (.json)<input type="file" accept=".json,application/json" data-plant="1"></label>${pl ? `<button type="button" data-act="plant-share" data-v="${esc(c.codigo)}">Compartir plantilla</button>` : ""}</div>`}
   </div>`;
 }
+/* Si al empezar se desmarcó una etapa que el PNT sí lleva, se puede añadir con justificación (queda en el registro). */
+function etapaAddHTML(){
+  const c = S.session.cfg, falta = CFG_FLAGS.filter(([k]) => !c[k]), hechos = (S.session.cfgCambios || []);
+  if (!falta.length && !hechos.length) return "";
+  return `<div class="card"><div class="card-head"><h2>¿Falta una etapa del PNT?</h2></div>
+    <span class="hint">Si al empezar quedó desmarcada una etapa que este PNT sí lleva, añádela aquí. Te pedirá el motivo y quedará en el registro.</span>
+    ${hechos.map(x => `<div class="notice info">Añadida «${esc(x.lbl)}» ${esc(human(x.at))}: ${esc(x.motivo)}</div>`).join("")}
+    ${falta.length ? `<div class="chips ui">${falta.map(([k, l]) => `<button type="button" data-act="etapa-add" data-k="${k}">+ ${esc(l)}</button>`).join("")}</div>` : ""}</div>`;
+}
 function viewInicio(){
   const ses = S.session, dr = S.draft, locked = !!ses;
   const v = locked ? ses : dr;
@@ -1700,6 +1745,7 @@ function viewInicio(){
       </div>
       <span class="hint">OCR local: gratis y en el dispositivo. Claude: más preciso con displays; consume uso de tu plan. Siempre puedes escribir a mano.</span></div>` : ""}
     ${!locked ? `<div class="notice info">Fecha de análisis: se registrará al pulsar «Iniciar ensayo» (ahora ${esc(human(isoLocal()))}).</div>` : `<div class="notice info">Ensayo <span class="mono">${esc(ses.testId)}</span> · fecha de análisis <b>${esc(human(ses.analysisDate))}</b></div>`}
+    ${locked && !S.finalized ? etapaAddHTML() : ""}
     ${locked || openSlots().length > 1 ? `<div class="card"><div class="card-head"><h2>Cerrar ${locked ? "este ensayo" : "este hueco"}</h2><span class="chip">Ensayo ${SLOT}</span></div>
       <span class="hint">${locked ? (S.finalized ? "Ya está finalizado: ciérralo para liberar el hueco cuando hayas subido el .zip." : "Si este ensayo no va a continuar, ciérralo. Te preguntará si estás seguro, pedirá el motivo y guardará antes una copia.") : "No tiene ningún ensayo empezado."}${openSlots().length > 1 ? " Los demás ensayos no se tocan." : ""}</span>
       <button type="button" class="b-bad w100" data-act="new-test">Cerrar ${locked ? "este ensayo" : "este hueco"}</button></div>` : ""}
@@ -2026,6 +2072,7 @@ function regHTML(){
   const capLine = key => { const c = S.caps[key]; if (!c || !c.photoId) return "—"; const src = !c.ocrCand ? "manual" : c.value !== c.ocrCand ? "corregido" : (c.engine==="claude"?"Claude":c.engine==="barcode"?"cód. barras":"OCR"); return `${esc(c.value)} <span class="tag ${src==="manual"||src==="corregido"?"":"ok"}">${src}</span>`; };
   const thumb = key => { const c = S.caps[key]; return c && c.photoId ? `<img class="thumb" data-photo="${c.photoId}" data-act="zoom" data-cap="${esc(key)}" alt="Foto">` : ""; };
   let html = `<div class="notice info">Fecha de análisis ${esc(human(S.session.analysisDate))} · ensayo ${esc(S.session.testId)}. Las acciones crean un registro nuevo; lo anulado se conserva con su motivo.</div>`;
+  for (const x of (S.session.cfgCambios || [])) html += `<div class="notice warn">Etapa añadida con el ensayo en marcha: «${esc(x.lbl)}» ${esc(human(x.at))} por ${esc(x.por)}. Motivo: ${esc(x.motivo)}</div>`;
   if (S.edit) html += `<div class="notice warn">Hay ${T(itemById(S.edit.itemId).tanda).un} ${T(itemById(S.edit.itemId).tanda).sing} en curso: termínalo para poder repetir pasos o preparar más cantidad.</div>`;
   for (const t of TANDAS) {
     const its = S.items.filter(i => i.tanda === t.key);
@@ -2198,6 +2245,7 @@ function live(){
 }
 let STATE_FOUND = false;
 function finalizeBlocker(){
+  if (PCFG().calib && !S.na.patron && curvaErrors().length) return "Falta completar la curva y los QC.";
   if (S.edit) return `Termina antes ${T(itemById(S.edit.itemId).tanda).el} ${T(itemById(S.edit.itemId).tanda).sing} en curso.`;
   if (S.items.some(i => !itemComplete(i))) return "Hay elementos incompletos: revísalos en el registro.";
   if (PCFG().etapas.analisis && !(S.analisis && S.analisis.lanzadaAt)) return "Falta registrar la introducción de las muestras en el equipo.";
@@ -2364,17 +2412,19 @@ const ACT = {
   "eq-toggle": el => { const sk = el.dataset.stage, eq = eqResolve(sk).obj.eq, t = el.dataset.tipo;
     if (eq.tipos.includes(t)) { eq.tipos = eq.tipos.filter(x => x !== t); delete eq.asign[t]; if (S.eqScan && S.eqScan.tipo === t) S.eqScan = null; } else eq.tipos.push(t);
     eq.confirmedAt = ""; save(); render(); },
-  "eq-scan": el => { const id = uid(); S.eqMeta[id] = { tipo: el.dataset.tipo }; const key = `eq:${id}`; ensureCap(key);
+  "eq-scan": el => { const id = uid(); S.eqMeta[id] = { tipo: eqBase(el.dataset.tipo) }; const key = `eq:${id}`; ensureCap(key);
     S.eqScan = { stage: el.dataset.stage, tipo: el.dataset.tipo, capKey: key, nombre:"" }; save(); render();
     const card = document.getElementById(capId(key)); if (card) card.scrollIntoView({ block:"center" }); },
   "eq-scan-cancel": () => { S.eqScan = null; save(); render(); },
   "eq-register": el => {
     const key = el.dataset.cap; if (!capReady(key) || !S.eqScan) return;
     const sc = S.eqScan, c = S.caps[key], eq = eqResolve(sc.stage).obj.eq;
-    if (sc.tipo === "otro" && !(sc.nombre || "").trim()) { toast("Escribe el nombre del equipo."); return; }
-    let e = S.equips.find(x => x.tipo === sc.tipo && x.code === c.value);
+    const base = eqBase(sc.tipo);
+    if (base === "otro" && !(sc.nombre || "").trim()) { toast("Escribe el nombre del equipo."); return; }
+    let e = S.equips.find(x => x.tipo === base && x.code === c.value);
+    if (e && Object.entries(eq.asign).some(([tt, id]) => tt !== sc.tipo && id === e.id)) { toast(`${e.code} ya está en esta etapa: escanea la otra unidad.`); return; }
     if (e) toast(`${e.code} ya estaba identificado: se reutiliza.`);
-    else { e = { id:"eq_" + uid(), tipo: sc.tipo, nombre:(sc.nombre || "").trim(), code: c.value, capKey: key, verif:"", verifNota:"", verifAt:"", at: isoLocal() }; S.equips.push(e); }
+    else { e = { id:"eq_" + uid(), tipo: base, nombre:(sc.nombre || "").trim(), code: c.value, capKey: key, verif:"", verifNota:"", verifAt:"", at: isoLocal() }; S.equips.push(e); }
     eq.asign[sc.tipo] = e.id; eq.confirmedAt = ""; S.eqScan = null; save(); render(); },
   "eq-use": el => { const eq = eqResolve(el.dataset.stage).obj.eq; eq.asign[el.dataset.tipo] = el.dataset.equip; eq.confirmedAt = ""; save(); render(); },
   "eq-unassign": el => { const eq = eqResolve(el.dataset.stage).obj.eq; delete eq.asign[el.dataset.tipo]; eq.confirmedAt = ""; save(); render(); },
@@ -2416,6 +2466,17 @@ const ACT = {
     if (g === "back") return go(e.returnTo || it.tanda);
   },
   "setv": el => { const inp = document.getElementById(el.dataset.target); inp.value = el.dataset.v; bindSet(el.dataset.bind, el.dataset.v); el.parentElement.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b === el))); live(); },
+  "roi-open": el => openRoi(el.dataset.cap),
+  "roi-read": () => { if (!ROI) return; const k = ROI.key, c = S.caps[k]; c.roi = { ...ROI.r }; S.roiLast = S.roiLast || {}; S.roiLast[roiKind(k)] = { ...ROI.r }; ROI = null; closeSheet(); save(); readCap(k, S.engine); },
+  "roi-full": () => { if (!ROI) return; const k = ROI.key; S.caps[k].roi = null; ROI = null; closeSheet(); save(); readCap(k, S.engine); },
+  "etapa-add": el => { const k = el.dataset.k, lbl = (CFG_FLAGS.find(x => x[0] === k) || [k, k])[1];
+    openSheet({ title:`Añadir «${lbl}»`, reason:true, body:`<p class="lead" style="margin:0">Se añade al ensayo en curso${k === "curva" ? " y aparece el paso «Curva y QC» después de «Patrones»" : ""}. Lo ya registrado no cambia.</p>`,
+      confirm:{ label:"Añadir al ensayo", run: () => { const m = ($("#sheet-reason").value || "").trim(); if (m.length < 5) return;
+        const before = screens().map(x => x.key), cur = before[Math.min(S.maxScreen, before.length - 1)];
+        S.session.cfg[k] = true;
+        if (k === "curva" && !(S.session.cfg.niveles || []).length) S.session.cfg.niveles = [];
+        S.session.cfgCambios = S.session.cfgCambios || []; S.session.cfgCambios.push({ k, lbl, motivo:m, por:S.session.operator, at:isoLocal() });
+        S.maxScreen = Math.max(0, screenIdx(cur)); closeSheet(); save(); render(); toast(`«${lbl}» añadida al ensayo.`); } } }); },
   "reocr": el => { const k = el.dataset.cap; if (el.dataset.engine === "local" && TESS.broken) { TESS.broken = ""; } readCap(k, el.dataset.engine); },
   "ocr-cancel": el => { const c = S.caps[el.dataset.cap]; c.readToken = "x"; c.reading = false; c.engine = c.engine || "manual"; save(); paintCap(el.dataset.cap); live(); const inp = document.querySelector(`#${capId(el.dataset.cap)} [data-capval]`); if (inp) inp.focus(); },
   "zoom": async el => { const c = S.caps[el.dataset.cap]; if (!c) return; const u = await photoURL(c.photoId); const wasReg = !!$("#reg-body");
@@ -2670,6 +2731,7 @@ function csvRows(){
   const ses = S.session, pnt = PCFG(), rows = [];
   const base = { ID_Ensayo:ses.testId, Codigo_Trabajo:ses.workCode, Fecha_Analisis:ses.analysisDate, Operador:ses.operator,
     Situacion_Formacion: ses.formacion ? FORMACION[ses.formacion].lbl : "", Acompanante_Email:ses.acompEmail || "", Acompanante_Rol:ses.acompRol || "", PNT_Codigo:ses.pnt, PNT_Titulo:pnt.titulo, PNT_Tecnica:ses.cfg.tecPnt || "", PNT_Laboratorio:ses.cfg.lab || "", PNT_Acreditacion:ses.cfg.acred || "", PNT_Origen:ses.cfg.origenPnt || "", Plantilla_PNT: plantTxt(ses.cfg), Version_Ariadna: APP_VERSION };
+  for (const x of (ses.cfgCambios || [])) rows.push({ ...base, Registro:"ETAPA_AÑADIDA", Estado:"VALIDO", Fecha_Hora_Inicio:x.at, Justificacion:`${x.lbl}: ${x.motivo} (${x.por})` });
   for (const t of TANDAS) {
     if (S.na[t.key]) rows.push({ ...base, Tanda:t.plur, Registro:"TANDA_NO_APLICA", Fecha_Hora_Inicio:S.naAt?.[t.key] || "" });
     for (const it of S.items.filter(i => i.tanda === t.key)) {
