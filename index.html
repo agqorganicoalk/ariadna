@@ -296,7 +296,7 @@ button:disabled{cursor:not-allowed}
 "use strict";
 
 /* ================= Configuración ================= */
-const APP_VERSION = "1.0-piloto · 06/10/2026";
+const APP_VERSION = "1.0-piloto · 06/10/2026b";
 const DOMINIO = "agqlabs.com";
 const FORMACION = {
   formado:      { lbl:"Formado en el PNT",              acomp:false },
@@ -984,7 +984,7 @@ async function paintCap(key){
     const err = capValueError(key);
     inp.classList.toggle("err", !!err); P("valerr").hidden = !err; P("valerr").textContent = err;
     const edited = c.ocrCand && c.value !== c.ocrCand;
-    const by = c.engine === "claude" ? "Claude" : c.engine === "barcode" ? `código de barras${c.barFormat ? " " + c.barFormat.replace(/_/g, " ") : ""}` : "OCR local";
+    const by = c.engine === "claude" ? "Claude" : c.engine === "barcode" ? `código de barras${c.barFormat ? " " + c.barFormat.replace(/_/g, " ") : ""}` : c.engine === "pp" ? "el lector de zona" : "OCR local";
     P("valhint").textContent = (c.roi && c.ocrCand ? "Zona marcada · " : "") + (!c.ocrCand ? "Entrada manual." : edited ? `Corregido a mano (${by} leyó «${c.ocrCand}»).` : `Leído por ${by}${c.ocrConf != null ? ` · confianza ${Math.round(c.ocrConf)} %` : ""}. Corrígelo si no coincide.`);
     P("raw").hidden = !c.ocrRaw; P("rawpre").textContent = c.ocrRaw;
     P("reocr").innerHTML = locked ? "" :
@@ -1036,8 +1036,8 @@ async function openRoi(key){
   box.addEventListener("pointerup", end); box.addEventListener("pointercancel", end);
 }
 async function cropBlob(blob, r){
-  const src = await loadBitmap(blob), W = src.width, H = src.height, m = 0.015;
-  const x = Math.max(0, r.x - m) * W, y = Math.max(0, r.y - m) * H, w = Math.min(1, r.x + r.w + m) * W - x, h = Math.min(1, r.y + r.h + m) * H - y;
+  const src = await loadBitmap(blob), W = src.width, H = src.height, mx = r.w * 0.04, my = r.h * 0.06;
+  const x = Math.max(0, r.x - mx) * W, y = Math.max(0, r.y - my) * H, w = Math.min(1, r.x + r.w + mx) * W - x, h = Math.min(1, r.y + r.h + my) * H - y;
   const cv = document.createElement("canvas"); cv.width = Math.max(1, Math.round(w)); cv.height = Math.max(1, Math.round(h));
   cv.getContext("2d").drawImage(src, x, y, w, h, 0, 0, cv.width, cv.height);
   return await new Promise((res, rej) => cv.toBlob(b => b ? res(b) : rej(new Error("recorte")), "image/jpeg", 0.95));
@@ -1057,7 +1057,8 @@ async function readCap(key, engine){
       res = await readBarcode(blob).catch(() => null);
       if (res) used = "barcode";
     }
-    if (!res) res = engine === "claude" ? await readWithClaude(blob, d) : await readLocal(blob, d.kind, onProg);
+    if (!res && engine !== "claude" && c.roi) { try { res = await readPP(blob, d.kind, onProg); used = "pp"; if (!res.value) { res = null; used = engine; } } catch (e) { console.warn("PP-OCR", e); res = null; } }
+    if (!res) res = engine === "claude" ? await readWithClaude(blob, d) : await readLocal(blob, d.kind, onProg, !!c.roi);
     if (c.readToken !== token) return;
     c.engine = used; c.barFormat = res.format || ""; c.ocrRaw = (res.raw || "").trim(); c.ocrConf = res.confidence ?? null;
     c.ocrCand = res.value || ""; c.value = c.ocrCand; c.validated = false;
@@ -1069,6 +1070,110 @@ async function readCap(key, engine){
   }
   c.reading = false; save(); paintCap(key); live();
   const inp = document.querySelector(`#${capId(key)} [data-capval]`); if (inp && !c.value) inp.focus();
+}
+
+
+/* ================= OCR de alta precisión (PP-OCRv4, en el dispositivo) para la zona marcada ================= */
+/* Reconocimiento PP-OCRv4 (solo rec) sobre la zona marcada: separa líneas por proyección y lee cada una. */
+const PPOCR = { sess:null, keys:null, allow:null };
+async function ppInit(base){
+  if (PPOCR.sess) return;
+  ort.env.wasm.numThreads = 1; ort.env.wasm.wasmPaths = base;
+  const [m, k] = await Promise.all([fetch(base + "rec.onnx").then(r => r.arrayBuffer()), fetch(base + "keys.txt").then(r => r.text())]);
+  PPOCR.keys = ["", ...k.split("\n").filter((x, i, a) => i < a.length - 1 || x !== ""), " "];
+  PPOCR.sess = await ort.InferenceSession.create(m, { executionProviders:["wasm"] });
+}
+function ppAllow(chars){ const s = new Set(chars.split("")); return PPOCR.keys.map((k, i) => i === 0 || s.has(k)); }
+function grayOf(cv){ const x = cv.getContext("2d", { willReadFrequently:true }).getImageData(0, 0, cv.width, cv.height).data, g = new Float32Array(cv.width*cv.height);
+  for (let i=0,j=0;i<x.length;i+=4,j++) g[j] = 0.299*x[i]+0.587*x[i+1]+0.114*x[i+2]; return g; }
+function ppLines(cv, fac){
+  const W = cv.width, H = cv.height, g = grayOf(cv), hist = new Uint32Array(256); for (const v of g) hist[v|0]++;
+  let sum=0; for (let v=0;v<256;v++) sum+=v*hist[v]; let sB=0,wB=0,best=0,thr=128;
+  for (let v=0;v<256;v++){ wB+=hist[v]; if(!wB) continue; const wF=g.length-wB; if(!wF) break; sB+=v*hist[v]; const b=wB*wF*(sB/wB-(sum-sB)/wF)**2; if(b>best){best=b;thr=v;} }
+  let dark=0; for (const v of g) if (v<thr) dark++; const inkDark = dark < g.length/2;
+  const row = new Float32Array(H); for (let y=0;y<H;y++){ let c=0; for (let x=0;x<W;x++){ const v=g[y*W+x]; if (inkDark ? v<thr : v>=thr) c++; } row[y]=c/W; }
+  const mx = Math.max(...row), on = Array.from(row, v => v > Math.max(0.02, mx * (fac || 0.12))); const bands=[]; let s=-1;
+  for (let y=0;y<=H;y++){ const o = y<H && on[y]; if (o && s<0) s=y; if (!o && s>=0){ bands.push([s,y]); s=-1; } }
+  const merged=[]; for (const b of bands){ const L=merged[merged.length-1]; if (L && b[0]-L[1] < Math.max(2,(L[1]-L[0])*0.25)) L[1]=b[1]; else merged.push([...b]); }
+  const tall = Math.max(1, ...merged.map(b=>b[1]-b[0]));
+  return merged.filter(b => b[1]-b[0] >= Math.max(8, tall*0.2)).map(([a,b]) => { const m=Math.round((b-a)*0.18)+2; return [Math.max(0,a-m), Math.min(H,b+m)]; });
+}
+async function ppRecLine(cv, y0, y1, allow){
+  const h = y1-y0, W = Math.max(8, Math.min(1600, Math.round(cv.width * 48 / h)));
+  const t = document.createElement("canvas"); t.width = W; t.height = 48; const tx = t.getContext("2d"); tx.drawImage(cv, 0, y0, cv.width, h, 0, 0, W, 48);
+  const d = tx.getImageData(0,0,W,48).data, f = new Float32Array(3*48*W);
+  for (let i=0,p=0;p<48*W;i+=4,p++){ f[p]=(d[i+2]/255-0.5)/0.5; f[48*W+p]=(d[i+1]/255-0.5)/0.5; f[2*48*W+p]=(d[i]/255-0.5)/0.5; }
+  const out = await PPOCR.sess.run({ [PPOCR.sess.inputNames[0]]: new ort.Tensor("float32", f, [1,3,48,W]) });
+  const o = out[PPOCR.sess.outputNames[0]], [_, T, C] = o.dims, a = o.data;
+  let txt = "", prev = -1, ps = [];
+  for (let t2=0;t2<T;t2++){ let bi=0,bv=-1; for (let c=0;c<C;c++){ if (allow && !allow[c]) continue; const v=a[t2*C+c]; if (v>bv){bv=v;bi=c;} }
+    if (bi!==0 && bi!==prev){ txt += PPOCR.keys[bi] || ""; ps.push(bv); } prev = bi; }
+  return { text: txt, conf: ps.length ? 100*ps.reduce((x,y)=>x+y,0)/ps.length : 0 };
+}
+/* Endereza la zona: prueba giros pequeños y se queda con el que separa mejor las líneas. */
+function ppDeskew(cv){
+  const k = Math.min(1, 300 / cv.width), w = Math.max(8, Math.round(cv.width*k)), h = Math.max(8, Math.round(cv.height*k));
+  let bestA = 0, bestV = -1;
+  for (let a = -8; a <= 8; a += 1) {
+    const t = document.createElement("canvas"); t.width = w; t.height = h; const x = t.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0,0,w,h);
+    x.translate(w/2, h/2); x.rotate(a*Math.PI/180); x.drawImage(cv, -w/2, -h/2, w, h);
+    const g = grayOf(t); let mean = 0; for (const v of g) mean += v; mean /= g.length;
+    const rows = new Float32Array(h); for (let y=0;y<h;y++){ let c=0; for (let i=0;i<w;i++) c += Math.abs(g[y*w+i]-mean) > 40 ? 1 : 0; rows[y]=c; }
+    let m = 0; for (const r of rows) m += r; m /= h; let v = 0; for (const r of rows) v += (r-m)*(r-m);
+    if (v > bestV) { bestV = v; bestA = a; }
+  }
+  if (!bestA) return cv;
+  const rad = Math.abs(bestA)*Math.PI/180, W2 = Math.ceil(cv.width*Math.cos(rad) + cv.height*Math.sin(rad)), H2 = Math.ceil(cv.width*Math.sin(rad) + cv.height*Math.cos(rad));
+  const r = document.createElement("canvas"); r.width = W2; r.height = H2; const x = r.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0,0,W2,H2);
+  x.translate(W2/2, H2/2); x.rotate(bestA*Math.PI/180); x.drawImage(cv, -cv.width/2, -cv.height/2); return r;
+}
+async function ppRead(bitmap, chars, deskew, fac){
+  const s = Math.min(1, 1600 / bitmap.width); let cv = document.createElement("canvas"); cv.width = Math.round(bitmap.width*s); cv.height = Math.round(bitmap.height*s); cv.getContext("2d").drawImage(bitmap, 0, 0, cv.width, cv.height);
+  if (deskew) cv = ppDeskew(cv);
+  const allow = chars ? ppAllow(chars) : null, lines = ppLines(cv, fac), out = [];
+  for (const [a,b] of (lines.length ? lines : [[0, cv.height]])) out.push({ ...(await ppRecLine(cv, a, b, allow)), h: b - a });
+  return out;
+}
+
+const PP_BASE = () => new URL(".", location.href).href;
+let ppLoading = null;
+function ppReady(onProg){
+  if (!ppLoading) ppLoading = (async () => {
+    onProg && onProg("Cargando el lector (solo la primera vez)…", 0.1);
+    if (typeof ort === "undefined") await withTimeout(loadScript("ort.wasm.min.js"), 60000, "el lector tarda demasiado en cargar");
+    await withTimeout(ppInit(PP_BASE()), 180000, "el modelo del lector tarda demasiado en cargar");
+  })().catch(e => { ppLoading = null; throw e; });
+  return ppLoading;
+}
+const CODE_PATTERNS = [/\bINMO-\d{3}(?=\b|\d{6,})/, /\bCEQU-\d{6}(?=\b|\d{6,})/, /\b[A-Z]{2}-\d{2}\/\d{6}\b/, /\bREC-[A-Z]{2}\d{8}\b/, /\b[A-Z]\d{4}\b/];
+function codeFromLines(lines){
+  for (const L of lines) {
+    const t = L.text.toUpperCase().replace(/\s*-\s*/g, "-").replace(/\s*\/\s*/g, "/").replace(/\b([A-Z]{2})-(\d{2})(?:7\/|[7I1L|])(\d{6})\b/g, "$1-$2/$3");
+    for (const re of CODE_PATTERNS) { const m = t.match(re); if (m) return { v:m[0], ok:true, conf:L.conf, raw:t }; }
+  }
+  let best = null;
+  for (const L of lines) { const c = codeCand(L.text.replace(/\s*-\s*/g, "-")); if (c.v && (!best || (c.ok - best.ok || L.conf - best.conf) > 0)) best = { ...c, conf:L.conf }; }
+  return best || { v:"", ok:false, conf:0 };
+}
+function numFromLines(lines){
+  let best = null;
+  for (const L of lines) { const c = numCand(L.text.replace(/\+/g, " ")); if (c.v && (!best || (c.ok - best.ok || (L.h || 0) - best.h || L.conf - best.conf) > 0)) best = { ...c, conf:L.conf, h:L.h || 0 }; }
+  return best || { v:"", ok:false, conf:0 };
+}
+async function readPP(blob, kind, onProg){
+  await ppReady(onProg);
+  onProg && onProg("Leyendo la zona…", 0.6);
+  const bm = await loadBitmap(blob), chars = kind === "number" ? "0123456789.,+-" : CODE_WL + " ";
+  const pick = ls => kind === "number" ? numFromLines(ls) : codeFromLines(ls);
+  let lines = null, best = { v:"", ok:false, conf:-1 };
+  const passes = [[false, 0.12], [true, 0.12], [true, 0.25], [false, 0.3]];
+  for (let k = 0; k < passes.length; k++) {
+    if (k) onProg && onProg("Enderezando y releyendo…", 0.6 + 0.1 * k);
+    const l2 = await ppRead(bm, chars, passes[k][0], passes[k][1]), b2 = pick(l2);
+    if (!lines || (b2.ok - best.ok || b2.conf - best.conf) > 0) { best = b2; lines = l2; }
+    if (best.ok && best.conf >= 85) break;
+  }
+  return { raw: lines.map(l => l.text).join("\n"), confidence: best.conf, value: best.v, engine:"pp" };
 }
 
 /* ================= Códigos de barras y QR (BarcodeDetector nativo o ZXing) ================= */
@@ -1169,18 +1274,69 @@ function getTess(){
   return TESS.p;
 }
 let tessQueue = Promise.resolve();
-function readLocal(blob, kind, onProg){
+/* OCR local. Con zona marcada: escala a un tamaño de letra cómodo para el motor, pasa a blanco y negro
+   (invirtiendo si el fondo es oscuro), deja margen y prueba varias lecturas; se queda con la que tiene el formato esperado. */
+function zoneCanvas(src, targetH, mode){
+  const s = Math.max(0.15, Math.min(4, targetH / src.height, 2400 / src.width));
+  const w = Math.max(8, Math.round(src.width * s)), h = Math.max(8, Math.round(src.height * s)), P = Math.round(h * 0.25) + 12;
+  const cv = document.createElement("canvas"); cv.width = w + 2*P; cv.height = h + 2*P;
+  const ctx = cv.getContext("2d", { willReadFrequently:true });
+  const t = document.createElement("canvas"); t.width = w; t.height = h; const tx = t.getContext("2d", { willReadFrequently:true }); tx.imageSmoothingQuality = "high"; tx.drawImage(src, 0, 0, w, h);
+  const img = tx.getImageData(0, 0, w, h), p = img.data, n = w*h, g = new Float32Array(n), hist = new Uint32Array(256);
+  for (let i=0,j=0;i<p.length;i+=4,j++){ const v = 0.299*p[i]+0.587*p[i+1]+0.114*p[i+2]; g[j]=v; hist[v|0]++; }
+  // Otsu
+  let sum = 0; for (let v=0; v<256; v++) sum += v*hist[v];
+  let sB = 0, wB = 0, best = 0, thr = 128;
+  for (let v=0; v<256; v++){ wB += hist[v]; if (!wB) continue; const wF = n - wB; if (!wF) break; sB += v*hist[v]; const mB = sB/wB, mF = (sum-sB)/wF, b = wB*wF*(mB-mF)*(mB-mF); if (b > best) { best = b; thr = v; } }
+  // fondo = lo que más abunda; si es oscuro, se invierte para tener texto oscuro sobre blanco
+  let dark = 0; for (let j=0;j<n;j++) if (g[j] < thr) dark++;
+  const inv = dark > n/2;
+  for (let i=0,j=0;i<p.length;i+=4,j++){
+    let v = mode === "gray" ? g[j] : (g[j] < thr ? 0 : 255); if (inv) v = 255 - v; p[i]=p[i+1]=p[i+2]=v; p[i+3]=255; }
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height); ctx.putImageData(img, P, P);
+  return cv;
+}
+function numCand(raw){
+  const t = String(raw || "").replace(/[Oo]/g, "0").replace(/(\d)[ \t]+(?=[.,\d])/g, "$1").replace(/([.,])[ \t]+(?=\d)/g, "$1");
+  const m = t.match(/\d+(?:[.,]\d+)?/g); if (!m) return { v:"", ok:false };
+  m.sort((a,b) => (/[.,]/.test(b) - /[.,]/.test(a)) || (b.replace(/\D/g,"").length - a.replace(/\D/g,"").length));
+  const v = m[0].replace(".", ","); return { v, ok: /^\d+,\d+$/.test(v) && !/^0\d/.test(v) };
+}
+function codeCand(raw){ const v = pickCode(String(raw || "").replace(/[|_]/g, " ")); return { v, ok: v.length >= 4 && /\d/.test(v) && /[A-Z]/.test(v) }; }
+function readLocal(blob, kind, onProg, zoned){
   const job = tessQueue.then(async () => {
     tessProg = onProg;
-    const canvas = await prepImage(blob, kind, 1200);
     const w = await getTess();
-    await w.setParameters({ tessedit_char_whitelist: kind === "number" ? NUM_WL : CODE_WL, tessedit_pageseg_mode: "6" });
-    onProg("Reconociendo texto…", 0.4);
-    let r;
-    try { r = await withTimeout(w.recognize(canvas), 30000, "la lectura ha superado 30 s"); }
-    catch (e) { try { await w.terminate(); } catch(_){} TESS.p = null; TESS.w = null; throw e; }
-    const raw = r.data.text || "";
-    return { raw, confidence: r.data.confidence, value: kind === "number" ? pickNumber(raw) : pickCode(raw) };
+    const wl = (kind === "number" ? NUM_WL + "+" : CODE_WL) + " ";
+    if (!zoned) {
+      const canvas = await prepImage(blob, kind, 1200);
+      await w.setParameters({ tessedit_char_whitelist: wl, tessedit_pageseg_mode: "6" });
+      onProg("Reconociendo texto…", 0.4);
+      let r;
+      try { r = await withTimeout(w.recognize(canvas), 30000, "la lectura ha superado 30 s"); }
+      catch (e) { try { await w.terminate(); } catch(_){} TESS.p = null; TESS.w = null; throw e; }
+      const raw = r.data.text || "";
+      return { raw, confidence: r.data.confidence, value: kind === "number" ? pickNumber(raw.replace(/\+/g, " ")) : pickCode(raw) };
+    }
+    const src = await loadBitmap(blob);
+    const plan = kind === "number"
+      ? [[110,"bin","7"],[70,"bin","7"],[160,"gray","7"],[110,"bin","6"]]
+      : [[90,"bin","7"],[150,"bin","6"],[60,"bin","7"],[110,"gray","6"]];
+    let best = null, raws = [];
+    for (let k = 0; k < plan.length; k++) {
+      const [hgt, mode, psm] = plan[k];
+      onProg("Reconociendo texto…", 0.4 + 0.6 * k / plan.length);
+      await w.setParameters({ tessedit_char_whitelist: wl, tessedit_pageseg_mode: psm, preserve_interword_spaces: "1" });
+      let r;
+      try { r = await withTimeout(w.recognize(zoneCanvas(src, hgt, mode)), 30000, "la lectura ha superado 30 s"); }
+      catch (e) { try { await w.terminate(); } catch(_){} TESS.p = null; TESS.w = null; throw e; }
+      const raw = (r.data.text || "").trim(); raws.push(raw);
+      const c = kind === "number" ? numCand(raw.replace(/\+/g, " ")) : codeCand(raw);
+      const score = (c.ok ? 100 : 0) + (r.data.confidence || 0);
+      if (c.v && (!best || score > best.score)) best = { ...c, raw, conf: r.data.confidence, score };
+      if (best && best.ok && best.conf >= 80) break;
+    }
+    return { raw: raws.join("\n—\n"), confidence: best ? best.conf : 0, value: best ? best.v : "" };
   });
   tessQueue = job.catch(()=>{}).finally(() => { tessProg = null; });
   return job;
@@ -2720,7 +2876,7 @@ function csvCell(v){ const s = String(v ?? ""); return /[;"\r\n]/.test(s) ? `"${
 function capCols(key){
   const c = S.caps[key]; if (!c || !c.photoId) return {};
   return { Valor_Leido_Foto:c.ocrCand, Origen_Dato: !c.ocrCand ? "MANUAL" : (c.value !== c.ocrCand ? "CORREGIDO" : "LECTURA_VALIDADA"),
-    Motor_Lectura: c.engine==="claude" ? "Claude" : c.engine==="local" ? "Tesseract" : c.engine==="barcode" ? `Codigo_barras ${c.barFormat||""}`.trim() : "", Confianza_Lectura: c.ocrConf==null ? "" : Math.round(c.ocrConf),
+    Motor_Lectura: c.engine==="claude" ? "Claude" : c.engine==="local" ? "Tesseract" : c.engine==="barcode" ? `Codigo_barras ${c.barFormat||""}`.trim() : c.engine==="pp" ? "PP-OCRv4 (zona marcada)" : "", Confianza_Lectura: c.ocrConf==null ? "" : Math.round(c.ocrConf),
     Foto: zipPath(key), Foto_SHA256:c.hash, Fecha_Hora_Foto:c.capturedAt };
 }
 function zipPath(key){ const c = S.caps[key];
