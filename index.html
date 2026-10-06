@@ -120,7 +120,7 @@ h2{font-size:17px;margin:0;text-wrap:balance}
 label.f,.f{font-weight:600;font-size:14px}
 .hint{font-size:13px;color:var(--muted)}
 .errmsg{color:var(--bad);font-size:13px}
-select,input[type=text],input[type=email],textarea{width:100%;font:inherit;color:var(--fg);background:var(--surface);border:1.5px solid var(--line);border-radius:var(--r);padding:11px 12px;min-height:48px}
+select,input[type=text],input[type=email],input[type=search],input[type=date],textarea{width:100%;-webkit-appearance:none;appearance:none;box-sizing:border-box;font:inherit;color:var(--fg);background:var(--surface);border:1.5px solid var(--line);border-radius:var(--r);padding:11px 12px;min-height:48px}
 textarea{min-height:120px;resize:vertical}
 input.big{font-size:21px;font-weight:600;padding-block:9px}
 input.err{border-color:var(--bad)}
@@ -296,7 +296,7 @@ button:disabled{cursor:not-allowed}
 "use strict";
 
 /* ================= Configuración ================= */
-const APP_VERSION = "1.0-piloto · 06/10/2026h";
+const APP_VERSION = "1.0-piloto · 06/10/2026i";
 const DOMINIO = "agqlabs.com";
 const FORMACION = {
   formado:      { lbl:"Formado en el PNT",              acomp:false },
