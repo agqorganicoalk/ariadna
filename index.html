@@ -296,7 +296,7 @@ button:disabled{cursor:not-allowed}
 "use strict";
 
 /* ================= Configuración ================= */
-const APP_VERSION = "1.0-piloto · 06/10/2026c";
+const APP_VERSION = "1.0-piloto · 06/10/2026e";
 const DOMINIO = "agqlabs.com";
 const FORMACION = {
   formado:      { lbl:"Formado en el PNT",              acomp:false },
@@ -873,6 +873,11 @@ function prepError(it, p){
   if (p.modo === "volumen") { const vt = mlOf(p.volTomado, p.volTomadoU); if (!(vt > 0)) return "Indica el volumen que tomas (mL)."; if (vt >= num(p.volFinal)) return "El volumen tomado debe ser menor que el volumen final."; }
   if (p.modo !== "directo") { if (!(num(p.volFinal) > 0)) return "Indica el volumen final al que llevas la preparación."; }
   if (p.modo === "directo" && p.concDecl && !okNum(p.concDecl)) return "La concentración declarada debe ser un número.";
+  if (p.modo === "directo" && it.tanda !== "muestra") {
+    if (!p.origen) return "Indica si es comercial o preparado otro día.";
+    if (p.origen === "lab" && !(p.origRef || "").trim()) return "Indica de qué ensayo o registro viene.";
+    if (p.origen === "lab" && !p.origFecha) return "Indica la fecha en que se preparó.";
+  }
   return "";
 }
 function dilError(it, p, d){
@@ -1664,6 +1669,7 @@ function curvaInit(){
 function lvAns(L){ const all = analitos(); if (L.ans) return L.ans.filter(a => all.includes(a));
   if (L.ref != null) { const r = S.curva && S.curva.niveles.find(x => x.n === L.ref); if (r && r.ans) return r.ans.filter(a => all.includes(a)); }
   return all; }
+const liveLv = list => (S.curva ? S.curva[list] : []).filter(L => !L.anulado);
 const lvSum = L => lvAns(L).reduce((t, a) => t + (mlOf(L.alic[a], S.curva.alicU) || 0), 0);
 const cfgAlic = (x, an) => x ? ((x.alicAn && x.alicAn[an] != null) ? x.alicAn[an] : x.alic) : null;
 function ptConc(L, an, kind){ if (!lvAns(L).includes(an)) return null; const sol = solById(srcObj(`${kind}|${an}`).src); const a = mlOf(L.alic[an], S.curva.alicU), vf = num(L.vf); return (sol && sol.C != null && a > 0 && vf > 0) ? sol.C * a / vf : null; }
@@ -1675,8 +1681,8 @@ function curvaDevs(){
   const chk = (L, c) => { if (!c) return; if (num(L.vf) !== num(c.vf)) out.push(`${L.n}: volumen final ${L.vf} mL (PNT ${c.vf})`);
     for (const an of lvAns(L)) { const ca = cfgAlic(c, an); if (ca == null || ca === "" || L.alic[an] == null || L.alic[an] === "") continue;
       if (Math.abs(mlOf(L.alic[an], S.curva.alicU) - mlOf(ca, pu)) > 1e-9) out.push(`${L.n} ${an}: ${L.alic[an]} ${S.curva.alicU || "mL"} (PNT ${ca} ${pu})`); } };
-  S.curva.niveles.forEach((L, i) => chk(L, cfg.niveles[i]));
-  S.curva.qcs.forEach((L, i) => { chk(L, (cfg.qc || [])[i]);
+  S.curva.niveles.forEach((L, i) => { if (!L.anulado) chk(L, cfg.niveles[i]); });
+  S.curva.qcs.forEach((L, i) => { if (L.anulado) return; chk(L, (cfg.qc || [])[i]);
     const ref = S.curva.niveles.find(x => x.n === L.ref);
     for (const an of analitos()) {
       const cq = ptConc(L, an, "qc"), cr = ref ? ptConc(ref, an, "cal") : null;
@@ -1690,13 +1696,13 @@ function curvaErrors(){
   if (!analitos().length) return ["No hay analitos: registra los patrones."];
   const e = S.eqScan ? "Termina o cancela el escaneo del equipo." : eqError("curva"); if (e) errs.push(e);
   for (const an of analitos()) { const x = srcError("cal|" + an); if (x) { errs.push("Calibración · " + x); break; } }
-  if (!S.curva.niveles.length) errs.push("Añade los puntos de la recta.");
-  const noPt = analitos().find(a => !S.curva.niveles.some(L => lvAns(L).includes(a))); if (noPt) errs.push(`${noPt} no está en ningún punto de la recta.`);
-  const names = S.curva.niveles.map(L => L.n.trim()), dup = names.find((n, i) => !n || names.indexOf(n) !== i); if (dup != null) errs.push(dup ? `Hay dos puntos llamados ${dup}.` : "Pon nombre a todos los puntos.");
-  for (const L of [...S.curva.niveles, ...S.curva.qcs]) { const e = levelErr(L); if (e) { errs.push(e); break; } }
-  const pend = S.curva.niveles.find(L => !L.hecho); if (pend) errs.push(`Marca ${pend.n} como preparado.`);
-  if (S.curva.qcs.length) { for (const an of analitos()) { const x = srcError("qc|" + an); if (x) { errs.push("QC · " + x); break; } }
-    const pq = S.curva.qcs.find(L => !L.hecho); if (pq) errs.push(`Marca ${pq.n} como preparado.`); }
+  if (!liveLv("niveles").length) errs.push("Añade los puntos de la recta.");
+  const noPt = analitos().find(a => !liveLv("niveles").some(L => lvAns(L).includes(a))); if (noPt) errs.push(`${noPt} no está en ningún punto de la recta.`);
+  const names = liveLv("niveles").map(L => L.n.trim()), dup = names.find((n, i) => !n || names.indexOf(n) !== i); if (dup != null) errs.push(dup ? `Hay dos puntos llamados ${dup}.` : "Pon nombre a todos los puntos.");
+  for (const L of [...liveLv("niveles"), ...liveLv("qcs")]) { const e = levelErr(L); if (e) { errs.push(e); break; } }
+  const pend = liveLv("niveles").find(L => !L.hecho); if (pend) errs.push(`Marca ${pend.n} como preparado.`);
+  if (liveLv("qcs").length) { for (const an of analitos()) { const x = srcError("qc|" + an); if (x) { errs.push("QC · " + x); break; } }
+    const pq = liveLv("qcs").find(L => !L.hecho); if (pq) errs.push(`Marca ${pq.n} como preparado.`); }
   if (curvaDevs().length && (S.curva.dev || "").trim().length < 5) errs.push("Justifica las diferencias con el PNT.");
   return errs;
 }
@@ -1707,12 +1713,15 @@ function levelErr(L){
   if (lvSum(L) >= num(L.vf)) return `${L.n}: lo que coges (${fnum(lvSum(L))} mL en total) debe ser menor que el volumen final (${L.vf} mL).`;
   return eqUseErr(S.curva.eq, ["pipeta"], L, `con qué pipeta preparas ${L.n}`);
 }
+const lvSnap = L => `${(L.n)}: enrase ${L.vf} mL; ` + lvAns(L).map(an => `${an} ${L.alic[an]} ${S.curva.alicU || "mL"}`).join(", ") + ((eqUsoOf(S.curva.eq, ["pipeta"], L) || {}).code ? `; pipeta ${eqUsoOf(S.curva.eq, ["pipeta"], L).code}` : "");
+const anyHecho = (list, an) => liveLv(list).some(L => L.hecho && lvAns(L).includes(an));
 function levelCard(L, i, kind, locked){
-  const dis = locked || S.finalized ? "disabled" : "", list = kind === "cal" ? "niveles" : "qcs";
+  const fin = locked || S.finalized, dis = fin || L.hecho ? "disabled" : "", list = kind === "cal" ? "niveles" : "qcs";
+  if (L.anulado) return `<div class="card" style="gap:6px;opacity:.75"><div class="card-head"><h2>${esc(L.n)}</h2><span class="chip bad">Anulado</span></div><span class="hint">Anulado ${esc(human(L.anulado.at))}: ${esc(L.anulado.motivo)}. Queda en el registro.</span></div>`;
   const ref = kind === "qc" ? S.curva.niveles.find(x => x.n === L.ref) : null;
   return `<div class="card" style="gap:8px">
     <div class="card-head"><h2>${esc(L.n)}${ref ? ` <span class="hint">≈ ${esc(L.ref)}</span>` : ""}</h2><span class="chip ${L.hecho ? "ok" : ""}">${L.hecho ? "Preparado " + esc(hhmm(L.hecho)) : "Pendiente"}</span></div>
-    ${kind === "qc" ? `<div class="unit"><span style="min-width:auto;font-family:var(--font-ui);color:var(--fg);font-weight:600">Equivale al punto</span><select data-qcref="${i}" ${dis}>${S.curva.niveles.map(x => `<option ${x.n === L.ref ? "selected" : ""}>${esc(x.n)}</option>`).join("")}</select></div>` : ""}
+    ${kind === "qc" ? `<div class="unit"><span style="min-width:auto;font-family:var(--font-ui);color:var(--fg);font-weight:600">Equivale al punto</span><select data-qcref="${i}" ${dis}>${liveLv("niveles").map(x => `<option ${x.n === L.ref ? "selected" : ""}>${esc(x.n)}</option>`).join("")}</select></div>` : ""}
     ${i === 0 && kind === "cal" ? `<div class="unit"><span style="min-width:auto;font-family:var(--font-ui);color:var(--fg);font-weight:600">Alícuotas en</span>${unitSel(["mL","µL"], S.curva.alicU || "mL", `data-act="curva-unit"`)}</div>` : ""}
     ${kind === "cal" ? `<div class="unit"><span style="min-width:auto;font-family:var(--font-ui);color:var(--fg);font-weight:600">Nombre</span><input type="text" class="mono" data-pt="${list}|${i}|n" value="${esc(L.n)}" autocapitalize="characters" ${dis}></div>` : ""}
     ${analitos().length > 1 && (kind === "cal" || L.ans) ? `<div class="field"><span class="f">Analitos en este matraz</span><div class="chips ui">${analitos().map(an => `<button type="button" data-act="pt-an" data-l="${list}|${i}" data-v="${esc(an)}" aria-pressed="${lvAns(L).includes(an)}" ${dis}>${esc(an)}</button>`).join("")}</div></div>` : ""}
@@ -1725,7 +1734,9 @@ function levelCard(L, i, kind, locked){
         return `<tr><td>${esc(an)}</td><td style="width:96px"><input type="text" inputmode="decimal" class="mono" style="min-height:38px;padding:6px 8px" data-pt="${list}|${i}|a|${esc(an)}" value="${esc(L.alic[an])}" ${dis}></td>
           <td class="n">${c == null ? "—" : fnum(c * 1000)}${off ? ` <span class="tag">≠ ${esc(L.ref)}</span>` : ""}</td></tr>`; }).join("")}
     </tbody></table></div>
-    <label class="check"><input type="checkbox" data-pthecho="${list}|${i}" ${L.hecho ? "checked" : ""} ${dis}><span>${esc(L.n)} preparado</span></label></div>`;
+    ${(L.correc || []).map(c => `<span class="hint">Corregido ${esc(hhmm(c.at))}: ${esc(c.motivo)} (antes: ${esc(c.antes)})</span>`).join("")}
+    <label class="check"><input type="checkbox" data-pthecho="${list}|${i}" ${L.hecho ? "checked" : ""} ${dis}><span>${esc(L.n)} preparado</span></label>
+    ${fin ? "" : `<div class="linkbtns">${L.hecho ? `<button type="button" data-act="pt-corregir" data-l="${list}|${i}">Corregir</button><button type="button" data-act="pt-anular" data-l="${list}|${i}">Anular este ${kind === "qc" ? "QC" : "punto"}</button>` : `<button type="button" data-act="pt-quitar" data-l="${list}|${i}">Quitar este ${kind === "qc" ? "QC" : "punto"}</button>`}</div>`}</div>`;
 }
 function viewCurva(){
   if (S.na.patron) return `<div class="eyebrow">Curva y QC</div><h1>Curva de calibración</h1><div class="notice info">La tanda de patrones no aplica en este ensayo.</div>`;
@@ -1737,13 +1748,13 @@ function viewCurva(){
     <p class="lead">${ans.length > 1 ? `Por defecto cada punto lleva los ${ans.length} analitos. Si preparas varias rectas, marca en cada matraz los analitos que lleva y ponle nombre (ej. CAF-P1, TEO-P1).` : "Cada punto lleva el analito."} La recta sale de los patrones de <b>calibración</b>; los QC, de los de <b>verificación</b>.${S.session.cfg.niveles.length ? " Los volúmenes vienen de la plantilla del PNT." : " Escribe los volúmenes del PNT: se guardarán para la próxima vez."}</p>
     <div class="stack">
       ${eqPanelHTML("curva", locked)}
-      <div class="card"><div class="card-head"><h2>Disoluciones para la curva</h2><span class="chip">Calibración</span></div>${ans.map(an => srcHTML("cal|" + an, locked)).join("")}</div>
+      <div class="card"><div class="card-head"><h2>Disoluciones para la curva</h2><span class="chip">Calibración</span></div>${ans.map(an => srcHTML("cal|" + an, locked || anyHecho("niveles", an))).join("")}</div>
       ${S.curva.niveles.map((L, i) => levelCard(L, i, "cal", locked)).join("")}
-      ${locked ? "" : `<div class="linkbtns"><button type="button" data-act="pt-add" data-v="niveles">+ Añadir punto</button>${S.curva.niveles.length > 1 && !S.curva.niveles[S.curva.niveles.length-1].hecho ? `<button type="button" data-act="pt-del" data-v="niveles">Quitar el último punto</button>` : ""}</div>`}
+      ${locked ? "" : `<div class="linkbtns"><button type="button" data-act="pt-add" data-v="niveles">+ Añadir punto</button></div>`}
       ${S.curva.qcs.length ? `<div class="card"><div class="card-head"><h2>Disoluciones para los QC</h2><span class="chip">Verificación</span></div>
-        <span class="hint">Los QC repiten un punto de la recta con el patrón de verificación y se intercalan en la secuencia cada ${cfg.qcCada} muestras.</span>${ans.map(an => srcHTML("qc|" + an, locked)).join("")}</div>
+        <span class="hint">Los QC repiten un punto de la recta con el patrón de verificación y se intercalan en la secuencia cada ${cfg.qcCada} muestras.</span>${ans.map(an => srcHTML("qc|" + an, locked || anyHecho("qcs", an))).join("")}</div>
         ${S.curva.qcs.map((L, i) => levelCard(L, i, "qc", locked)).join("")}` : ""}
-      ${locked ? "" : `<div class="linkbtns"><button type="button" data-act="pt-add" data-v="qcs">+ Añadir QC</button>${S.curva.qcs.length && !S.curva.qcs[S.curva.qcs.length-1].hecho ? `<button type="button" data-act="pt-del" data-v="qcs">Quitar el último QC</button>` : ""}</div>`}
+      ${locked ? "" : `<div class="linkbtns"><button type="button" data-act="pt-add" data-v="qcs">+ Añadir QC</button></div>`}
       ${avisos.length ? `<div class="notice info"><b>Comprueba la disolución de los QC</b> (solo aviso; los criterios se evalúan en el formato de procesado): ${avisos.map(esc).join(" · ")}. ¿Es la disolución de verificación que toca?</div>` : ""}
       ${devs.length ? `<div class="card"><div class="card-head"><h2>Diferencias con el PNT: justifícalas</h2><span class="chip review">${devs.length}</span></div>
         <div class="notice warn">${devs.map(esc).join("<br>")}</div>
@@ -2000,6 +2011,7 @@ function natFieldHTML(it){
     <input type="text" id="subm" data-bind="item.submatriz" value="${esc(it.submatriz || "")}" placeholder="${L.length ? "O escribe otra" : "Escribe la naturaleza"}" autocomplete="off"></div>
     ${it.submatriz && !known ? `<div class="field"><label class="f" for="submasa">Peso que pide el PNT para esta naturaleza (opcional)</label><div class="unit"><input type="text" inputmode="decimal" id="submasa" class="mono" data-bind="item.subMasa" value="${esc(it.subMasa || "")}"><span>g</span></div><span class="hint">Nueva naturaleza: se guardará en la plantilla del PNT.</span></div>` : ""}`;
 }
+const cadErr = it => it.tanda === "muestra" || it.tipoMuestra === "blanco" ? "" : !it.cad ? "Indica si está dentro de caducidad." : it.cad === "no" && (it.cadNota || "").trim().length < 5 ? "Explica por qué usas uno caducado." : "";
 function viewItem(){
   const e = S.edit, it = itemById(e.itemId), t = T(it.tanda), p = prepById(it, e.prepId);
   const title = it.code || `${t.sing[0].toUpperCase()+t.sing.slice(1)} ${pad(it.seq)}`;
@@ -2019,6 +2031,9 @@ function viewItem(){
           <div class="field"><span class="f">¿Para qué es este patrón?</span>
             <div class="seg" role="group"><button type="button" data-act="set-uso" data-v="cal" aria-pressed="${it.uso === "cal"}">Calibración</button><button type="button" data-act="set-uso" data-v="ver" aria-pressed="${it.uso === "ver"}">Verificación y fortificación</button></div></div>` : ""}
         ${needsNat(it) ? natFieldHTML(it) : ""}
+        ${t.key !== "muestra" ? `<div class="field"><span class="f">¿Está dentro de caducidad?</span>
+          <div class="seg" role="group"><button type="button" data-act="set-cad" data-v="si" aria-pressed="${it.cad === "si"}">Sí</button><button type="button" data-act="set-cad" data-v="no" aria-pressed="${it.cad === "no"}">No</button></div>
+          ${it.cad === "no" ? `<textarea style="min-height:70px" data-bind="item.cadNota" placeholder="Ej.: revalidado por el responsable hasta 12/2026.">${esc(it.cadNota || "")}</textarea>` : ""}</div>` : ""}
         <div class="field" ${t.key === "patron" && usesAnalitos() ? "hidden" : ""}><label class="f" for="nombre">${t.key==="muestra" ? "Descripción de la muestra (opcional)" : t.key==="patron" ? "Nombre del patrón / analito (opcional)" : "Nombre del reactivo (opcional)"}</label>
           <input type="text" id="nombre" data-bind="item.nombre" value="${esc(it.nombre)}" placeholder="${t.key==="reactivo" ? "Ej.: Acetonitrilo HPLC" : t.key==="patron" ? "Ej.: Cloruro de colina" : "Ej.: Cápsulas lote 2409"}"></div>
         <button type="button" class="b-sec w100" data-act="discard-item">Descartar este ${t.sing}</button></div>`;
@@ -2053,7 +2068,11 @@ function viewItem(){
         ${p.modo === "masa" && t.key === "muestra" && it.tipoMuestra !== "blanco" ? `<div class="field"><label class="f" for="uds">Nº de unidades pesadas (opcional)</label><input type="text" inputmode="numeric" id="uds" class="mono" data-bind="prep.uds" value="${esc(p.uds || "")}" placeholder="Cápsulas, comprimidos, sobres…"><span class="hint">Solo si pesas unidades enteras (Ud. Ext. en el formato).</span></div>` : ""}
         ${p.modo === "volumen" ? volField("prep.volTomado", p.volTomado, "¿Cuánto tomas?", [], "voltom", "prep.volTomadoU", p.volTomadoU || "mL") : ""}
         ${p.modo !== "directo" ? volField("prep.volFinal", p.volFinal, "¿A qué volumen final lo llevas?", VOL_FINAL, "volfin") :
-          `<div class="row2"><div class="field"><label class="f" for="cdecl">Concentración declarada (opcional)</label><input type="text" inputmode="decimal" id="cdecl" class="mono" data-bind="prep.concDecl" value="${esc(p.concDecl)}"></div>
+          `${t.key !== "muestra" ? `<div class="field"><span class="f">¿De dónde sale?</span>
+            <div class="seg" role="group"><button type="button" data-act="set-orig" data-v="com" aria-pressed="${p.origen === "com"}">Comercial</button><button type="button" data-act="set-orig" data-v="lab" aria-pressed="${p.origen === "lab"}">Preparado otro día</button></div></div>
+           ${p.origen === "lab" ? `<div class="row2"><div class="field"><label class="f" for="oref">Ensayo o registro de origen</label><input type="text" id="oref" class="mono" data-bind="prep.origRef" value="${esc(p.origRef || "")}" placeholder="OT, ensayo o código"></div>
+             <div class="field"><label class="f" for="ofec">Preparado el</label><input type="date" id="ofec" data-bind="prep.origFecha" value="${esc(p.origFecha || "")}"></div></div>` : ""}` : ""}
+           <div class="row2"><div class="field"><label class="f" for="cdecl">Concentración declarada (opcional)</label><input type="text" inputmode="decimal" id="cdecl" class="mono" data-bind="prep.concDecl" value="${esc(p.concDecl)}"></div>
            <div class="field"><label class="f" for="cdeclu">Unidad</label><input type="text" id="cdeclu" class="mono" data-bind="prep.concDeclUnit" value="${esc(p.concDeclUnit)}" placeholder="mg/mL, pH, µS/cm…"></div></div>`}
         <div id="calc"></div>
       </div>`;
@@ -2131,10 +2150,10 @@ function buildLista(){
   const row = (tipo, code, sol, conc) => out.push({ id:"l_" + uid(), tipo, code, sol, conc, pos:String(pos++), iny:"1" });
   if (S.analisis && S.analisis.blanco !== false) row("Blanco", "BLANCO", "", "");
   const cfg = PCFG().calib, curva = cfg && S.curva && !S.na.patron;
-  if (curva) S.curva.niveles.forEach(L => row("Calibración", L.n, lvAns(L).length === analitos().length ? `${analitos().length} analitos` : lvAns(L).join(", "), ""));
+  if (curva) liveLv("niveles").forEach(L => row("Calibración", L.n, lvAns(L).length === analitos().length ? `${analitos().length} analitos` : lvAns(L).join(", "), ""));
   else for (const it of liveItems("patron")) for (const p of validPreps(it).filter(p => p.finishedAt)) { const ch = chain(it, p), nd = p.dils.filter(d => d.estado==="valida" && d.finishedAt).length;
     row("Patrón", it.code, `P${p.n}${nd ? ` · D${nd}` : ""}`, ch.final.C != null ? fconc(ch.final.C, ch.final.unit) : ""); }
-  const qcs = curva ? S.curva.qcs : []; let qi = 0, sinceQC = 0;
+  const qcs = curva ? liveLv("qcs") : []; let qi = 0, sinceQC = 0;
   const addQC = () => { if (!qcs.length) return; const L = qcs[qi % qcs.length]; qi++; row("QC", L.n, `≈ ${L.ref} · verificación`, ""); sinceQC = 0; };
   if (qcs.length) addQC();
   for (const it of liveItems("muestra")) for (const p of validPreps(it).filter(p => p.finishedAt)) {
@@ -2268,9 +2287,10 @@ function regHTML(){
     if (!its.length) { html += `<div class="hint">${S.na[t.key] ? `Marcada como no aplicable ${esc(human(S.naAt?.[t.key]))}.` : "Sin registros todavía."}</div>`; continue; }
     for (const it of its) {
       html += `<div class="reg-item"><header><span><b class="mono">${esc(it.code || `${t.pref} ${pad(it.seq)}`)}</b>${it.analito ? ` <span class="tag info">${esc(it.analito)} · ${usoLbl(it.uso)}</span>` : ""}${it.submatriz ? ` <span class="tag info">${esc(subLbl(it.submatriz))}</span>` : ""}</span>${itemStatusChip(it)}</header>`;
-      if (it.estado === "anulado") { html += `<div class="reg-ev anulada"><span class="motivo">Descartado ${esc(human(it.anuladoAt))}: ${esc(it.motivo)}</span></div></div>`; continue; }
+      if (it.estado === "anulado") { html += `<div class="reg-ev anulada"><span class="motivo">${it.idDoneAt ? "Anulado" : "Descartado"} ${esc(human(it.anuladoAt))}: ${esc(it.motivo)}</span></div></div>`; continue; }
       html += `<div class="reg-ev"><div class="h"><b>Identificación</b><span class="t">${esc(human(it.idDoneAt))}</span></div>
-        <div style="display:flex;gap:10px;align-items:flex-start">${thumb(it.codeCap)}${dl([["Código", capLine(it.codeCap)], it.nombre && ["Nombre", esc(it.nombre)]])}</div></div>`;
+        <div style="display:flex;gap:10px;align-items:flex-start">${thumb(it.codeCap)}${dl([["Código", capLine(it.codeCap)], it.nombre && ["Nombre", esc(it.nombre)], it.cad && ["Caducidad", it.cad === "si" ? "En vigor" : `Caducado: ${esc(it.cadNota)}`]])}</div>
+        ${!busy && !(S.edit && S.edit.itemId === it.id) ? `<div class="reg-acts"><button type="button" data-act="item-anular" data-item="${it.id}">Anular ${t.key === "muestra" ? "esta" : "este"} ${esc(it.tipoMuestra === "blanco" ? "blanco" : t.sing)}</button></div>` : ""}</div>`;
       for (const p of it.preps) {
         const pc = prepCalc(it, p), an = p.estado === "anulada";
         const modo = p.modo === "masa" ? "Pesada" : p.modo === "volumen" ? "Volumen" : (t.key==="muestra" ? "Directa" : "Listo para usar");
@@ -2279,6 +2299,7 @@ function regHTML(){
           <div style="display:flex;gap:10px;align-items:flex-start">${p.modo==="masa" ? thumb(p.masaCap) : ""}${dl([["Tipo", modo],
             p.modo==="masa" && ["Masa", capLine(p.masaCap) + " " + esc((S.caps[p.masaCap] && S.caps[p.masaCap].unit) || "g")], p.modo==="masa" && t.key!=="muestra" && ["Pureza", esc(p.pureza)+" %"],
             p.modo==="volumen" && ["Tomado", esc(p.volTomado)+" "+esc(p.volTomadoU || "mL")], p.modo!=="directo" && ["Volumen final", esc(p.volFinal)+" mL"],
+            p.modo==="directo" && p.origen && ["Origen", p.origen === "com" ? "Comercial" : `Preparado ${esc(p.origFecha)} · ${esc(p.origRef)}`],
             ["Concentración", esc(fconc(pc.C, pc.unit))], ["Equipos", eqSum(p.eq)],
             ...(p.fort && p.fort.doneAt ? analitos().filter(a => p.fort.rows[a]).map(a => { const r = p.fort.rows[a], so = solById(r.src), f = fortRow(it, p, a);
               if (r.skip) return [`Fortif. ${a}`, `No se fortifica: ${esc(r.skipWhy)}`];
@@ -2313,7 +2334,7 @@ function regHTML(){
     html += `<div class="reg-t">Curva de calibración y QC</div><div class="reg-item">`;
     html += `<div class="reg-ev"><div class="h"><b>Disoluciones de partida</b></div>${dl(analitos().flatMap(an => ["cal","qc"].map(k => { const o = srcObj(k + "|" + an), so = solById(o.src);
       return [`${k === "cal" ? "Curva" : "QC"} · ${an}`, so ? `${esc(so.label)} · ${esc(fconc(so.C, so.unit))}${!srcMatch(so, srcWant(k + "|" + an)) ? ` <span class="tag">${esc(o.just)}</span>` : ""}` : "—"]; })))}<div>${dl([["Equipos", eqSum(S.curva.eq)]])}</div></div>`;
-    for (const [list, kind] of [["niveles","cal"],["qcs","qc"]]) for (const L of S.curva[list]) html += `<div class="reg-ev"><div class="h"><b>${esc(L.n)}</b><span class="t">${L.hecho ? esc(human(L.hecho)) : "pendiente"}</span></div>${dl([["Enrase", esc(L.vf) + " mL"], ...lvAns(L).map(an => [an, `${esc(L.alic[an])} ${esc(S.curva.alicU || "mL")} → ${fnum((ptConc(L, an, kind) || NaN) * 1000)} µg/mL`]), eqUsoOf(S.curva.eq, ["pipeta"], L) && eqUseOpts(S.curva.eq, ["pipeta"]).length > 1 ? ["Pipeta", esc(eqUsoOf(S.curva.eq, ["pipeta"], L).code)] : null])}</div>`;
+    for (const [list, kind] of [["niveles","cal"],["qcs","qc"]]) for (const L of S.curva[list]) html += `<div class="reg-ev${L.anulado ? " anulada" : ""}"><div class="h"><b>${esc(L.n)}</b><span class="t">${L.hecho ? esc(human(L.hecho)) : "pendiente"}</span></div>${L.anulado ? `<span class="motivo">Anulado ${esc(human(L.anulado.at))}: ${esc(L.anulado.motivo)}</span>` : ""}${dl([["Enrase", esc(L.vf) + " mL"], ...lvAns(L).map(an => [an, `${esc(L.alic[an])} ${esc(S.curva.alicU || "mL")} → ${fnum((ptConc(L, an, kind) || NaN) * 1000)} µg/mL`]), eqUsoOf(S.curva.eq, ["pipeta"], L) && eqUseOpts(S.curva.eq, ["pipeta"]).length > 1 ? ["Pipeta", esc(eqUsoOf(S.curva.eq, ["pipeta"], L).code)] : null, ...(L.correc || []).map(c => ["Corregido " + esc(hhmm(c.at)), `${esc(c.motivo)} · antes: ${esc(c.antes)}`])])}</div>`;
     if (S.curva.dev) html += `<div class="reg-ev"><span class="motivo">Diferencias con el PNT: ${esc(S.curva.dev)}</span></div>`;
     html += `</div>`;
   }
@@ -2360,7 +2381,7 @@ function live(){
     if (e.stage === "id") {
       const why = !S.caps[it.codeCap]?.photoId ? "Falta la foto de la etiqueta." : S.caps[it.codeCap].reading ? "Espera a que termine la lectura." : !S.caps[it.codeCap].value ? "Escribe el código." : capValueError(it.codeCap) || (!S.caps[it.codeCap].validated ? "Marca la comprobación del código." : "") ||
         (it.tanda === "patron" && usesAnalitos() && !cleanAn(it.analito) ? "Indica el analito." : "") || (it.tanda === "patron" && usesAnalitos() && !it.uso ? "Indica si es de calibración o de verificación." : "") ||
-        (needsNat(it) && !(it.submatriz || "").trim() ? "Indica la naturaleza de la muestra." : "");
+        (needsNat(it) && !(it.submatriz || "").trim() ? "Indica la naturaleza de la muestra." : "") || cadErr(it);
       if (it.tipoMuestra === "blanco") return setBar(`<div class="btns"><button class="b-sec back" data-act="pause">Salir</button><button class="b-pri" data-act="id-done">Continuar a la preparación</button></div>`);
       return setBar(`${why ? `<div class="why">${esc(why)}</div>` : ""}<div class="btns"><button class="b-sec back" data-act="pause">Salir</button><button class="b-pri" data-act="id-done" ${why?"disabled":""}>Continuar a la preparación</button></div>`);
     }
@@ -2496,6 +2517,8 @@ const ACT = {
   "set-nat": el => { const it = itemById(S.edit.itemId); it.submatriz = el.dataset.v; save(); render(); },
   "add-blanco": () => { if (S.edit) stashEdit(); const it = newItem("muestra", true); },
   "set-an": el => { const it = itemById(S.edit.itemId); it.analito = el.dataset.v; const i = $("#analito"); if (i) i.value = it.analito; save(); render(); },
+  "set-orig": el => { const it = itemById(S.edit.itemId), p = prepById(it, S.edit.prepId); p.origen = el.dataset.v; if (p.origen === "lab" && !p.origRef) p.origRef = it.code || ""; save(); render(); },
+  "set-cad": el => { const it = itemById(S.edit.itemId); it.cad = el.dataset.v; it.cadAt = isoLocal(); save(); render(); },
   "set-uso": el => { const it = itemById(S.edit.itemId); it.uso = el.dataset.v; save(); render(); },
   "ctrl-add": el => { const it = itemById(S.edit.itemId), p = newPrep(it, "control", "", el.dataset.v);
     Object.assign(S.edit, { stage:"prepEq", prepId:p.id }); delete S.edit.dilId; delete S.edit.phId; eqInit(stageKeyOf(S.edit)); save(); render(); window.scrollTo(0,0); },
@@ -2517,6 +2540,15 @@ const ACT = {
   "cap-unit": el => { const c = S.caps[el.dataset.cap]; if (c.unit === el.dataset.v) return; c.unit = el.dataset.v; c.validated = false; S.unitPref = S.unitPref || {}; const it = itemById(el.dataset.cap.split(":")[1]); S.unitPref["masa:" + (it ? it.tanda : "")] = c.unit; save(); render(); },
   "vol-unit": el => { const [o, f] = bindTarget(el.dataset.bind); if (!o) return; o[f] = el.dataset.v; S.unitPref = S.unitPref || {}; S.unitPref.vol = el.dataset.v; save(); render(); },
   "fort-unit": el => { const p = prepById(itemById(S.edit.itemId), S.edit.prepId); p.fort.rows[el.dataset.an].uLU = el.dataset.v; save(); render(); },
+  "pt-corregir": el => { const [list, i] = el.dataset.l.split("|"), L = S.curva[list][+i]; if (!L) return;
+    openSheet({ title:`Corregir ${L.n}`, body:`<p class="lead" style="margin:0">Se guarda lo que había (${esc(lvSnap(L))}) y el motivo. Corrige y vuelve a marcarlo preparado.</p>`, reason:true,
+      confirm:{ label:"Corregir", run: r => { (L.correc = L.correc || []).push({ at:isoLocal(), motivo:r, antes:lvSnap(L) }); L.hecho = ""; closeSheet(); save(); render(); } } }); },
+  "pt-quitar": el => { const [list, i] = el.dataset.l.split("|"), arr = S.curva[list], L = arr[+i]; if (!L || L.hecho) return;
+    arr.splice(+i, 1); if (list === "niveles") S.curva.qcs.forEach(q => { if (q.ref === L.n) q.ref = (liveLv("niveles")[0] || {}).n || ""; });
+    save(); render(); toast(`${L.n} quitado.`); },
+  "pt-anular": el => { const [list, i] = el.dataset.l.split("|"), L = S.curva[list][+i]; if (!L) return;
+    openSheet({ title:`Anular ${L.n}`, body:`<p class="lead" style="margin:0">${esc(L.n)} ya está preparado: no se borra, queda en el registro como anulado con su motivo y sale de la secuencia de inyección.</p>`, reason:true, danger:true,
+      confirm:{ label:"Anular", run: r => { L.anulado = { motivo:r, at:isoLocal() }; if (S.analisis && !S.analisis.lanzadaAt) S.analisis.lista = buildLista(); closeSheet(); save(); render(); } } }); },
   "pt-an": el => { const [list, i] = el.dataset.l.split("|"), L = S.curva[list][+i], an = el.dataset.v, cur = lvAns(L);
     L.ans = cur.includes(an) ? cur.filter(a => a !== an) : [...cur, an]; save(); render(); },
   "eq-uso": el => { const h = el.dataset.h; let o = null;
@@ -2574,6 +2606,9 @@ const ACT = {
   "add-item": el => { if (S.edit) stashEdit(); newItem(el.dataset.tanda); },
   "resume": () => { S.edit.open = true; save(); render(); },
   "pause": () => { S.edit.open = false; save(); render(); toast("Guardado. Puedes continuar desde la tanda o el registro."); },
+  "item-anular": el => { const it = itemById(el.dataset.item), t = T(it.tanda);
+    openSheet({ title:`Anular ${it.code || t.sing}`, body:`<p class="lead" style="margin:0">No se borra: queda en el registro como anulado, con sus fotos y su motivo, y deja de contar en el ensayo${t.key === "patron" ? " (si se usaba para la curva o los QC, tendrás que elegir otra disolución)" : ""}.</p>`, reason:true, danger:true,
+      confirm:{ label:"Anular", run: r => { it.estado = "anulado"; it.motivo = r; it.anuladoAt = isoLocal(); if (S.analisis && !S.analisis.lanzadaAt) S.analisis.lista = buildLista(); closeSheet(); save(); render(); if ($("#reg-body")) $("#reg-body").innerHTML = regHTML(); toast(`${it.code || t.sing} anulado.`); } } }); },
   "discard-item": () => {
     const it = itemById(S.edit.itemId), t = T(it.tanda), c = S.caps[it.codeCap];
     if (!c.photoId) { S.items = S.items.filter(x => x !== it); S.edit = null; endEdit(); save(); render(); return; }
@@ -2875,7 +2910,7 @@ function plantillaDeHoy(){
   if (c.curva && S.curva && !S.na.patron) {
     const lv = (L, kind) => { const an = analitos(), al = {}; an.forEach(a => al[a] = L.alic[a]); const vals = [...new Set(Object.values(al))];
       return Object.assign({ n:L.n, vf:L.vf, alic: vals.length === 1 ? vals[0] : (vals[0] || "") , alicAn: al }, L.ans ? { ans:[...L.ans] } : {}, kind === "qc" ? { ref:L.ref } : {}); };
-    c.niveles = S.curva.niveles.map(L => lv(L, "cal")); c.qcs = S.curva.qcs.map(L => lv(L, "qc")); c.alicU = S.curva.alicU || "mL";
+    c.niveles = liveLv("niveles").map(L => lv(L, "cal")); c.qcs = liveLv("qcs").map(L => lv(L, "qc")); c.alicU = S.curva.alicU || "mL";
   }
   for (const it of liveItems("muestra")) for (const p of validPreps(it).filter(p => p.control === "fortificada" && p.fort && p.fort.doneAt)) {
     const n = c.naturalezas.find(x => x.n === it.submatriz); const r = Object.values(p.fort.rows).find(r => !r.skip && r.uL);
@@ -2908,7 +2943,7 @@ const CSV_COLS = ["ID_Ensayo","Codigo_Trabajo","Fecha_Analisis","Operador","Situ
   "Factor_Dilucion","Factor_Dilucion_Acumulado","Concentracion","Unidad_Concentracion","Lectura","Unidad_Lectura",
   "Analito","Uso_Patron","Submatriz","Tipo_Control","Disolucion_Origen","Conc_Origen_mg_mL","Volumen_Anadido_uL","Cantidad_Anadida_ug","Nivel_Fortificacion_mg_kg","Nivel_Objetivo_mg_kg","Justificacion",
   "Tecnica","Metodo_Equipo","Edicion_PNT","Secuencia","Ruta_Datos","Posicion_Vial","Num_Inyecciones",
-  "Etapa","Equipo_Tipo","Equipo_Nombre","Equipo_Codigo","Verificacion_Equipo","Nota_Verificacion","Equipo_Medida",
+  "Etapa","Equipo_Tipo","Equipo_Nombre","Equipo_Codigo","Verificacion_Equipo","Nota_Verificacion","Equipo_Medida","En_Caducidad","Origen_Disolucion","Ref_Origen","Fecha_Preparacion_Origen",
   "Valor_Leido_Foto","Origen_Dato","Motor_Lectura","Confianza_Lectura","Foto","Foto_SHA256","Fecha_Hora_Foto","Observaciones"];
 function eqRows(rows, ctx, etapa, eq, estado){
   if (!eq) return;
@@ -2937,10 +2972,10 @@ function csvRows(){
     if (S.na[t.key]) rows.push({ ...base, Tanda:t.plur, Registro:"TANDA_NO_APLICA", Fecha_Hora_Inicio:S.naAt?.[t.key] || "" });
     for (const it of S.items.filter(i => i.tanda === t.key)) {
       const ib = { ...base, Tanda:t.plur, Orden_Tanda:it.seq, Codigo:it.code, Nombre:it.nombre, Analito:it.analito || "", Uso_Patron: it.uso ? usoLbl(it.uso) : "", Submatriz: it.submatriz ? subLbl(it.submatriz) : "" };
-      rows.push({ ...ib, Registro:"IDENTIFICACION", Estado: it.estado==="anulado" ? "ANULADO" : "VALIDO", Motivo_Anulacion: it.motivo||"", Fecha_Hora_Inicio:it.createdAt, Fecha_Hora_Fin:it.idDoneAt, ...capCols(it.codeCap) });
+      rows.push({ ...ib, Registro:"IDENTIFICACION", Estado: it.estado==="anulado" ? "ANULADO" : "VALIDO", Motivo_Anulacion: it.motivo||"", Fecha_Hora_Inicio:it.createdAt, Fecha_Hora_Fin:it.idDoneAt, En_Caducidad: it.cad === "si" ? "SI" : it.cad === "no" ? "NO" : "", Justificacion: it.cad === "no" ? it.cadNota : "", ...capCols(it.codeCap) });
       for (const p of it.preps) {
         const pc = prepCalc(it, p);
-        rows.push({ ...ib, Registro:"PREPARACION", Num_Preparacion:p.n, Tipo_Preparacion:p.tipo, Estado: p.estado==="anulada" ? "ANULADO" : "VALIDO", Motivo_Anulacion:p.motivo,
+        rows.push({ ...ib, Registro:"PREPARACION", Num_Preparacion:p.n, Tipo_Preparacion:p.tipo, Estado: (p.estado==="anulada" || it.estado==="anulado") ? "ANULADO" : "VALIDO", Motivo_Anulacion:p.motivo,
           Fecha_Hora_Inicio:p.startedAt, Fecha_Hora_Fin:p.finishedAt, Modo_Preparacion:p.modo,
           Masa_g: p.modo==="masa" ? csvNum(massG(p)) : "", Volumen_Tomado_mL: p.modo==="volumen" ? csvNum(mlOf(p.volTomado, p.volTomadoU)) : "",
           Lectura: p.modo==="masa" ? csvNum(num(S.caps[p.masaCap]?.value)) : p.modo==="volumen" ? csvNum(num(p.volTomado)) : "", Unidad_Lectura: p.modo==="masa" ? ((S.caps[p.masaCap] && S.caps[p.masaCap].unit) || "g") : p.modo==="volumen" ? (p.volTomadoU || "mL") : "",
@@ -2948,23 +2983,24 @@ function csvRows(){
           Unidades_Muestra: it.tanda==="muestra" && p.uds ? csvNum(num(p.uds)) : "", Volumen_Final_mL: p.modo!=="directo" ? csvNum(num(p.volFinal)) : "",
           Factor_Dilucion_Acumulado:"1", Concentracion:csvNum(pc.C), Unidad_Concentracion:pc.unit, ...(p.modo==="masa" ? capCols(p.masaCap) : {}) });
         rows[rows.length - 1].Equipo_Medida = (eqUsoOf(p.eq, measBases(p), p) || {}).code || "";
+        if (p.modo === "directo" && p.origen) Object.assign(rows[rows.length - 1], { Origen_Disolucion: p.origen === "com" ? "COMERCIAL" : "PREPARADO_OTRO_DIA", Ref_Origen: p.origen === "lab" ? p.origRef : "", Fecha_Preparacion_Origen: p.origen === "lab" ? p.origFecha : "" });
         rows[rows.length - 1].Tipo_Control = p.control ? p.control.toUpperCase() : it.tipoMuestra === "blanco" ? "BLANCO_EXTRACCION" : (it.tanda === "muestra" ? "NORMAL" : "");
-        eqRows(rows, { ...ib, Num_Preparacion:p.n, Tipo_Preparacion:p.tipo }, "PREPARACION", p.eq, p.estado==="anulada" ? "ANULADO" : "VALIDO");
+        eqRows(rows, { ...ib, Num_Preparacion:p.n, Tipo_Preparacion:p.tipo }, "PREPARACION", p.eq, (p.estado==="anulada" || it.estado==="anulado") ? "ANULADO" : "VALIDO");
         if (p.fort) for (const an of Object.keys(p.fort.rows)) { const r = p.fort.rows[an], so = r.skip ? null : solById(r.src), f = fortRow(it, p, an);
           if (r.skip) { rows.push({ ...ib, Registro:"FORTIFICACION", Num_Preparacion:p.n, Tipo_Control:"FORTIFICADA", Analito:an, Estado:"NO_REALIZADA", Fecha_Hora_Fin:p.fort.doneAt, Justificacion:r.skipWhy }); continue; }
-          rows.push({ ...ib, Registro:"FORTIFICACION", Num_Preparacion:p.n, Tipo_Control:"FORTIFICADA", Analito:an, Estado: p.estado==="anulada" ? "ANULADO" : "VALIDO", Fecha_Hora_Fin:p.fort.doneAt,
+          rows.push({ ...ib, Registro:"FORTIFICACION", Num_Preparacion:p.n, Tipo_Control:"FORTIFICADA", Analito:an, Estado: (p.estado==="anulada" || it.estado==="anulado") ? "ANULADO" : "VALIDO", Fecha_Hora_Fin:p.fort.doneAt,
             Disolucion_Origen: so ? so.label : "", Conc_Origen_mg_mL: so ? csvNum(so.C) : "", Uso_Patron: so ? usoLbl(so.it.uso) : "", Volumen_Anadido_uL:csvNum(uLOf(r.uL, r.uLU)),
             Cantidad_Anadida_ug:csvNum(f.ug), Nivel_Fortificacion_mg_kg:csvNum(f.nivel), Nivel_Objetivo_mg_kg: f.obj != null ? csvNum(f.obj) : "", Justificacion:[r.just, p.fort.devNota].filter(Boolean).join(" | ") }); }
         const ch = chain(it, p);
         ch.out.forEach(({ d, src, r }, i) => {
           const s0 = src || srcBefore(it, p, d), rr = r || dilCalc(s0, d, 1);
           rows.push({ ...ib, Registro:"DILUCION", Num_Preparacion:p.n, Tipo_Preparacion:p.tipo, Num_Dilucion:i+1,
-            Estado: (d.estado==="anulada" || p.estado==="anulada") ? "ANULADO" : "VALIDO", Motivo_Anulacion:d.motivo,
+            Estado: (d.estado==="anulada" || p.estado==="anulada" || it.estado==="anulado") ? "ANULADO" : "VALIDO", Motivo_Anulacion:d.motivo,
             Fecha_Hora_Inicio:d.startedAt, Fecha_Hora_Fin:d.finishedAt, Num_Fases: d.fases===2 ? d.numFases : "1", Fase_Usada: d.fases===2 ? d.fase : "",
             Volumen_Fase_mL: d.fases===2 ? csvNum(mlOf(d.volFase, d.volFaseU)) : "", Alicuota_mL:csvNum(mlOf(d.alicuota, d.alicuotaU)), Volumen_Enrase_mL:csvNum(num(d.enrase)),
             Factor_Dilucion:csvNum(rr.fd), Factor_Dilucion_Acumulado: r ? csvNum(rr.fdAcum) : "", Concentracion:csvNum(rr.C), Unidad_Concentracion:s0.unit,
             Observaciones: d.fases===2 ? "Concentración calculada asumiendo todo el analito en la fase tomada" : "", Equipo_Medida: (eqUsoOf(d.eq, ["pipeta"], d) || {}).code || "" });
-          eqRows(rows, { ...ib, Num_Preparacion:p.n, Num_Dilucion:i+1 }, "DILUCION", d.eq, (d.estado==="anulada" || p.estado==="anulada") ? "ANULADO" : "VALIDO");
+          eqRows(rows, { ...ib, Num_Preparacion:p.n, Num_Dilucion:i+1 }, "DILUCION", d.eq, (d.estado==="anulada" || p.estado==="anulada" || it.estado==="anulado") ? "ANULADO" : "VALIDO");
         });
       }
       for (const x of it.phs) { rows.push({ ...ib, Registro:"LECTURA_PH", Estado: x.estado==="anulada" ? "ANULADO" : "VALIDO", Motivo_Anulacion:x.motivo,
@@ -2975,9 +3011,10 @@ function csvRows(){
   if (pnt.calib && S.curva && !S.na.patron) {
     for (const [list, kind, reg] of [["niveles","cal","CAL_PUNTO"],["qcs","qc","QC_PUNTO"]]) for (const L of S.curva[list]) for (const anl of lvAns(L)) {
       const o = srcObj(kind + "|" + anl), so = solById(o.src);
-      rows.push({ ...base, Registro:reg, Etapa:"CURVA", Codigo:L.n, Analito:anl, Estado:"VALIDO", Fecha_Hora_Fin:L.hecho, Disolucion_Origen: so ? so.label : "", Conc_Origen_mg_mL: so ? csvNum(so.C) : "",
+      rows.push({ ...base, Registro:reg, Etapa:"CURVA", Codigo:L.n, Analito:anl, Estado: L.anulado ? "ANULADO" : "VALIDO", Motivo_Anulacion: L.anulado ? L.anulado.motivo : "", Fecha_Hora_Fin:L.hecho, Disolucion_Origen: so ? so.label : "", Conc_Origen_mg_mL: so ? csvNum(so.C) : "",
         Uso_Patron: so ? usoLbl(so.it.uso) : "", Alicuota_mL:csvNum(mlOf(L.alic[anl], S.curva.alicU)), Volumen_Enrase_mL:csvNum(num(L.vf)), Concentracion:csvNum(ptConc(L, anl, kind)), Unidad_Concentracion:"mg/mL",
         Justificacion:[o.just, S.curva.dev].filter(Boolean).join(" | "), Observaciones: L.ref ? `Equivale a ${L.ref}` : "", Equipo_Medida: (eqUsoOf(S.curva.eq, ["pipeta"], L) || {}).code || "" }); }
+    for (const list of ["niveles","qcs"]) for (const L of S.curva[list]) for (const c of (L.correc || [])) rows.push({ ...base, Registro:"CORRECCION_PUNTO", Etapa:"CURVA", Codigo:L.n, Estado:"VALIDO", Fecha_Hora_Inicio:c.at, Justificacion:c.motivo, Observaciones:"Antes: " + c.antes });
     eqRows(rows, base, "CURVA", S.curva.eq, "VALIDO");
   }
   for (const [k, v] of Object.entries(S.patJust || {})) if ((v.motivo || "").trim()) { const [an, u] = k.split("|"); rows.push({ ...base, Registro:"PATRON_NO_DISPONIBLE", Analito:an, Uso_Patron:usoLbl(u), Estado:"VALIDO", Fecha_Hora_Inicio:v.at, Justificacion:v.motivo }); }
@@ -3083,9 +3120,9 @@ function datosPrimariosSheets(){
       .forEach(([l, k]) => rows.push([{ v:l, s:1 }, c[k], v[k]]));
     if (cfg.curva && S.curva && !S.na.patron) {
       rows.push([]); rows.push([H("Punto Cal."), H("Vol. Cal. (mL)"), H("Vol. Fin. (mL)"), H("Concentración (mg/mL)")]);
-      for (const L of S.curva.niveles) rows.push([L.n, xn(mlOf(L.alic[a], S.curva.alicU)), xn(L.vf), xn(ptConc(L, a, "cal"))]);
-      if (S.curva.qcs.length) { rows.push([]); rows.push([H("QC's"), H("Vol. Patrón Verificación (mL)"), H("Vol. final (mL)"), H("Conc. teórica (mg/mL)"), H("Equivale a")]);
-        for (const L of S.curva.qcs) rows.push([L.n, xn(mlOf(L.alic[a], S.curva.alicU)), xn(L.vf), xn(ptConc(L, a, "qc")), L.ref || ""]); }
+      for (const L of liveLv("niveles").filter(L => lvAns(L).includes(a))) rows.push([L.n, xn(mlOf(L.alic[a], S.curva.alicU)), xn(L.vf), xn(ptConc(L, a, "cal"))]);
+      if (liveLv("qcs").some(L => lvAns(L).includes(a))) { rows.push([]); rows.push([H("QC's"), H("Vol. Patrón Verificación (mL)"), H("Vol. final (mL)"), H("Conc. teórica (mg/mL)"), H("Equivale a")]);
+        for (const L of liveLv("qcs").filter(L => lvAns(L).includes(a))) rows.push([L.n, xn(mlOf(L.alic[a], S.curva.alicU)), xn(L.vf), xn(ptConc(L, a, "qc")), L.ref || ""]); }
     }
     rows.push([]);
   }
