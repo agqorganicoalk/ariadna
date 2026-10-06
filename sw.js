@@ -1,5 +1,5 @@
 /* Ariadna: funciona sin conexión. Cambia VERSION al publicar una versión nueva. */
-const VERSION = "ariadna-20261006-1317";
+const VERSION = "ariadna-20261006-1926";
 const FILES = ["./", "index.html", "tesseract.min.js", "zxing.min.js", "jszip.min.js", "ocr-eng.js", "ocr-worker-simd.js", "ocr-worker.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-180.png"];
 /* El lector de zona (unos 25 MB) se guarda aparte la primera vez que se usa y no se vuelve a descargar con cada versión. */
 const MODELS = "ariadna-modelos-v1";

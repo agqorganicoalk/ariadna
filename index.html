@@ -296,7 +296,7 @@ button:disabled{cursor:not-allowed}
 "use strict";
 
 /* ================= Configuración ================= */
-const APP_VERSION = "1.0-piloto · 06/10/2026b";
+const APP_VERSION = "1.0-piloto · 06/10/2026c";
 const DOMINIO = "agqlabs.com";
 const FORMACION = {
   formado:      { lbl:"Formado en el PNT",              acomp:false },
@@ -312,6 +312,7 @@ function lsSet(k, v){ try { localStorage.setItem(k, v); } catch(_) {} }
 const EQUIPOS = {
   balanza:      { nombre:"Balanza",                verif:"¿Verificación diaria de la balanza realizada y conforme?" },
   pipeta:       { nombre:"Pipeta / micropipeta",   verif:"¿Pipeta dentro de su periodo de calibración?" },
+  probeta:      { nombre:"Probeta / dispensador" },
   phmetro:      { nombre:"pH-metro",               verif:"¿pH-metro calibrado hoy y conforme?" },
   estufa:       { nombre:"Estufa",                 verif:"¿Temperatura de la estufa dentro de rango?" },
   ultrasonidos: { nombre:"Baño de ultrasonidos" },
@@ -350,7 +351,7 @@ const TECNICAS = {
    «plantilla» del PNT en el móvil y la próxima vez salen ya rellenados. La plantilla se comparte como archivo .json.
    Así, un cambio de PNT no obliga a cambiar (ni a reaprobar) la app. */
 const ETAPAS_DEF = {
-  prep:{ reactivo:["balanza","pipeta","ultrasonidos","agitador"], patron:["balanza","pipeta","ultrasonidos","vortex","frigorifico"],
+  prep:{ reactivo:["balanza","pipeta","probeta","ultrasonidos","agitador"], patron:["balanza","pipeta","ultrasonidos","vortex","frigorifico"],
          muestra:["balanza","pipeta","ultrasonidos","vortex","agitador","centrifuga","evaporador","estufa"] },
   dil:["pipeta","vortex","ultrasonidos","centrifuga"], ph:["phmetro","agitador"] };
 /* Lista oficial de PNT del laboratorio: [código, tipo, laboratorio, nombre, técnica, acreditación].
@@ -857,6 +858,7 @@ function dilCalc(src, d, acc){
 function srcForNewDil(it, p){ return chain(it, p).final; }
 
 function prepError(it, p){
+  const ue = eqUseErr(p.eq, measBases(p), p, p.modo === "masa" ? "en qué balanza pesas" : "con qué mides el volumen"); if (ue) return ue;
   if (p.modo === "masa") {
     const c = S.caps[p.masaCap];
     if (!c || !c.photoId) return "Falta la foto de la balanza.";
@@ -876,6 +878,7 @@ function prepError(it, p){
 function dilError(it, p, d){
   const src = srcBefore(it, p, d);
   if (!d.fases) return "Indica si tiene una o más fases.";
+  const ue = eqUseErr(d.eq, ["pipeta"], d, "con qué pipeta coges la alícuota"); if (ue) return ue;
   const a = mlOf(d.alicuota, d.alicuotaU), Vf = num(d.enrase), Vph = mlOf(d.volFase, d.volFaseU);
   if (d.fases === 2) {
     if (!(Vph > 0)) return "Indica cuántos mL tiene la fase de la que tomas.";
@@ -1465,7 +1468,7 @@ function eqSuggested(stageKey){
 function eqRequired(stageKey){
   const k = stageKey.split(":")[0];
   if (k === "curva") return ["pipeta"];
-  if (k === "prep") { const m = eqResolve(stageKey).obj.modo; return m === "masa" ? ["balanza"] : m === "volumen" ? ["pipeta"] : []; }
+  if (k === "prep") { const m = eqResolve(stageKey).obj.modo; return m === "masa" ? ["balanza"] : []; }
   if (k === "dil") return ["pipeta"];
   if (k === "ph") return ["phmetro"];
   return S.analisis && S.analisis.tecnica ? [TECNICAS[S.analisis.tecnica].equipo, ...(TECNICAS[S.analisis.tecnica].columna ? ["columna"] : [])] : [];
@@ -1479,6 +1482,7 @@ function eqInit(stageKey){
 function eqError(stageKey){
   const eq = eqResolve(stageKey).obj.eq; if (!eq) return "Indica los equipos.";
   for (const t of eqRequired(stageKey)) if (!eq.tipos.includes(t)) return `Falta ${eqDef(t).nombre.toLowerCase()}.`;
+  if (stageKey.startsWith("prep:") && eqResolve(stageKey).obj.modo === "volumen" && !eq.tipos.some(t => VOLUMETRICO.includes(eqBase(t)))) return "Indica con qué mides el volumen: pipeta o probeta.";
   for (const t of eq.tipos) {
     const e = equipById(eq.asign[t]);
     if (!e) return `Escanea o elige: ${eqDef(t).nombre}.`;
@@ -1487,6 +1491,16 @@ function eqError(stageKey){
   }
   return "";
 }
+/* Si en una etapa hay dos equipos del mismo tipo (dos balanzas, dos micropipetas), se elige con cuál se hace cada medida. */
+const VOLUMETRICO = ["pipeta", "probeta"];
+function eqUseOpts(eq, bases){ if (!eq) return []; return [...new Set(eq.tipos.filter(t => bases.includes(eqBase(t))).map(t => eq.asign[t]).filter(Boolean))].map(equipById).filter(Boolean); }
+const eqUsoOf = (eq, bases, h) => { const o = eqUseOpts(eq, bases); return o.length === 1 ? o[0] : (o.find(e => e.id === h.eqUso) || null); };
+function eqUseErr(eq, bases, h, what){ const o = eqUseOpts(eq, bases); return o.length > 1 && !o.some(e => e.id === h.eqUso) ? `Elige ${what}.` : ""; }
+function eqUseHTML(eq, bases, h, ref, label, dis){
+  const o = eqUseOpts(eq, bases); if (o.length < 2) return "";
+  return `<div class="field"><span class="f">${esc(label)}</span><div class="seg" role="group">${o.map(e => `<button type="button" data-act="eq-uso" data-h="${esc(ref)}" data-v="${e.id}" aria-pressed="${h.eqUso === e.id}" ${dis || ""}>${esc(e.code)}</button>`).join("")}</div></div>`;
+}
+const measBases = p => p.modo === "masa" ? ["balanza"] : p.modo === "volumen" ? VOLUMETRICO : [];
 const eqLabel = e => `${e.tipo === "otro" && e.nombre ? e.nombre : EQUIPOS[e.tipo].nombre} ${e.code}`;
 function eqSum(eq){
   if (!eq || !eq.tipos.length) return "—";
@@ -1635,7 +1649,7 @@ const needsNat = it => it.tanda === "muestra" && it.tipoMuestra !== "blanco" && 
 function curvaInit(){
   const cfg = PCFG().calib;
   if (!S.curva) {
-    S.curva = { src:{}, eq:null, dev:"", alicU: S.session.cfg.alicU || "mL", niveles: cfg.niveles.map(x => ({ n:x.n, vf:x.vf, alic:{}, hecho:"" })), qcs: (cfg.qc || []).map(x => ({ n:x.n, ref:x.ref, vf:x.vf, alic:{}, hecho:"" })) };
+    S.curva = { src:{}, eq:null, dev:"", alicU: S.session.cfg.alicU || "mL", niveles: cfg.niveles.map(x => ({ n:x.n, vf:x.vf, alic:{}, hecho:"", ...(x.ans ? { ans:[...x.ans] } : {}) })), qcs: (cfg.qc || []).map(x => ({ n:x.n, ref:x.ref, vf:x.vf, alic:{}, hecho:"", ...(x.ans ? { ans:[...x.ans] } : {}) })) };
     if (!S.curva.niveles.length) S.curva.niveles.push({ n:"P1", vf:"", alic:{}, hecho:"" });
   }
   const def = (x, an) => x ? ((x.alicAn && x.alicAn[an] != null) ? x.alicAn[an] : (x.alic ?? "")) : "";
@@ -1646,15 +1660,20 @@ function curvaInit(){
   }
   return S.curva;
 }
+/* Analitos que lleva cada matraz. Así se preparan varias rectas: unos analitos juntos y otros por separado. */
+function lvAns(L){ const all = analitos(); if (L.ans) return L.ans.filter(a => all.includes(a));
+  if (L.ref != null) { const r = S.curva && S.curva.niveles.find(x => x.n === L.ref); if (r && r.ans) return r.ans.filter(a => all.includes(a)); }
+  return all; }
+const lvSum = L => lvAns(L).reduce((t, a) => t + (mlOf(L.alic[a], S.curva.alicU) || 0), 0);
 const cfgAlic = (x, an) => x ? ((x.alicAn && x.alicAn[an] != null) ? x.alicAn[an] : x.alic) : null;
-function ptConc(L, an, kind){ const sol = solById(srcObj(`${kind}|${an}`).src); const a = mlOf(L.alic[an], S.curva.alicU), vf = num(L.vf); return (sol && sol.C != null && a > 0 && vf > 0) ? sol.C * a / vf : null; }
+function ptConc(L, an, kind){ if (!lvAns(L).includes(an)) return null; const sol = solById(srcObj(`${kind}|${an}`).src); const a = mlOf(L.alic[an], S.curva.alicU), vf = num(L.vf); return (sol && sol.C != null && a > 0 && vf > 0) ? sol.C * a / vf : null; }
 function curvaDevs(){
   if (S.session && S.session.cfg.revision) { curvaDevs.avisos = []; return []; }
   curvaDevs.avisos = [];
   const cfg = PCFG().calib, out = [];
   const pu = S.session.cfg.alicU || "mL";
   const chk = (L, c) => { if (!c) return; if (num(L.vf) !== num(c.vf)) out.push(`${L.n}: volumen final ${L.vf} mL (PNT ${c.vf})`);
-    for (const an of analitos()) { const ca = cfgAlic(c, an); if (ca == null || ca === "" || L.alic[an] == null || L.alic[an] === "") continue;
+    for (const an of lvAns(L)) { const ca = cfgAlic(c, an); if (ca == null || ca === "" || L.alic[an] == null || L.alic[an] === "") continue;
       if (Math.abs(mlOf(L.alic[an], S.curva.alicU) - mlOf(ca, pu)) > 1e-9) out.push(`${L.n} ${an}: ${L.alic[an]} ${S.curva.alicU || "mL"} (PNT ${ca} ${pu})`); } };
   S.curva.niveles.forEach((L, i) => chk(L, cfg.niveles[i]));
   S.curva.qcs.forEach((L, i) => { chk(L, (cfg.qc || [])[i]);
@@ -1672,14 +1691,21 @@ function curvaErrors(){
   const e = S.eqScan ? "Termina o cancela el escaneo del equipo." : eqError("curva"); if (e) errs.push(e);
   for (const an of analitos()) { const x = srcError("cal|" + an); if (x) { errs.push("Calibración · " + x); break; } }
   if (!S.curva.niveles.length) errs.push("Añade los puntos de la recta.");
-  for (const L of [...S.curva.niveles, ...S.curva.qcs]) { if (!(num(L.vf) > 0)) { errs.push(`${L.n}: indica el volumen final.`); break; }
-    const an = analitos().find(a => !(mlOf(L.alic[a], S.curva.alicU) > 0)); if (an) { errs.push(`${L.n}: indica cuánto coges de ${an}.`); break; }
-    if (mlOf(L.alic[an], S.curva.alicU) >= num(L.vf)) { errs.push(`${L.n}: el volumen que coges debe ser menor que el final.`); break; } }
+  const noPt = analitos().find(a => !S.curva.niveles.some(L => lvAns(L).includes(a))); if (noPt) errs.push(`${noPt} no está en ningún punto de la recta.`);
+  const names = S.curva.niveles.map(L => L.n.trim()), dup = names.find((n, i) => !n || names.indexOf(n) !== i); if (dup != null) errs.push(dup ? `Hay dos puntos llamados ${dup}.` : "Pon nombre a todos los puntos.");
+  for (const L of [...S.curva.niveles, ...S.curva.qcs]) { const e = levelErr(L); if (e) { errs.push(e); break; } }
   const pend = S.curva.niveles.find(L => !L.hecho); if (pend) errs.push(`Marca ${pend.n} como preparado.`);
   if (S.curva.qcs.length) { for (const an of analitos()) { const x = srcError("qc|" + an); if (x) { errs.push("QC · " + x); break; } }
     const pq = S.curva.qcs.find(L => !L.hecho); if (pq) errs.push(`Marca ${pq.n} como preparado.`); }
   if (curvaDevs().length && (S.curva.dev || "").trim().length < 5) errs.push("Justifica las diferencias con el PNT.");
   return errs;
+}
+function levelErr(L){
+  if (!lvAns(L).length) return `${L.n}: marca qué analitos lleva este matraz.`;
+  if (!(num(L.vf) > 0)) return `${L.n}: indica el volumen final.`;
+  const an = lvAns(L).find(a => !(mlOf(L.alic[a], S.curva.alicU) > 0)); if (an) return `${L.n}: indica cuánto coges de ${an}.`;
+  if (lvSum(L) >= num(L.vf)) return `${L.n}: lo que coges (${fnum(lvSum(L))} mL en total) debe ser menor que el volumen final (${L.vf} mL).`;
+  return eqUseErr(S.curva.eq, ["pipeta"], L, `con qué pipeta preparas ${L.n}`);
 }
 function levelCard(L, i, kind, locked){
   const dis = locked || S.finalized ? "disabled" : "", list = kind === "cal" ? "niveles" : "qcs";
@@ -1688,9 +1714,13 @@ function levelCard(L, i, kind, locked){
     <div class="card-head"><h2>${esc(L.n)}${ref ? ` <span class="hint">≈ ${esc(L.ref)}</span>` : ""}</h2><span class="chip ${L.hecho ? "ok" : ""}">${L.hecho ? "Preparado " + esc(hhmm(L.hecho)) : "Pendiente"}</span></div>
     ${kind === "qc" ? `<div class="unit"><span style="min-width:auto;font-family:var(--font-ui);color:var(--fg);font-weight:600">Equivale al punto</span><select data-qcref="${i}" ${dis}>${S.curva.niveles.map(x => `<option ${x.n === L.ref ? "selected" : ""}>${esc(x.n)}</option>`).join("")}</select></div>` : ""}
     ${i === 0 && kind === "cal" ? `<div class="unit"><span style="min-width:auto;font-family:var(--font-ui);color:var(--fg);font-weight:600">Alícuotas en</span>${unitSel(["mL","µL"], S.curva.alicU || "mL", `data-act="curva-unit"`)}</div>` : ""}
+    ${kind === "cal" ? `<div class="unit"><span style="min-width:auto;font-family:var(--font-ui);color:var(--fg);font-weight:600">Nombre</span><input type="text" class="mono" data-pt="${list}|${i}|n" value="${esc(L.n)}" autocapitalize="characters" ${dis}></div>` : ""}
+    ${analitos().length > 1 && (kind === "cal" || L.ans) ? `<div class="field"><span class="f">Analitos en este matraz</span><div class="chips ui">${analitos().map(an => `<button type="button" data-act="pt-an" data-l="${list}|${i}" data-v="${esc(an)}" aria-pressed="${lvAns(L).includes(an)}" ${dis}>${esc(an)}</button>`).join("")}</div></div>` : ""}
     <div class="unit"><span style="min-width:auto;font-family:var(--font-ui);color:var(--fg);font-weight:600">Volumen final</span><input type="text" inputmode="decimal" class="mono" data-pt="${list}|${i}|vf" value="${esc(L.vf)}" ${dis}><span>mL</span></div>
+    ${eqUseHTML(S.curva.eq, ["pipeta"], L, `${list}|${i}`, "¿Con qué pipeta lo preparas?", dis)}
+    ${lvAns(L).length && num(L.vf) > 0 && lvSum(L) >= num(L.vf) ? `<div class="notice warn">Coges ${fnum(lvSum(L))} mL en total y el volumen final es ${esc(L.vf)} mL: no cabe.</div>` : ""}
     <div class="tbl"><table style="min-width:0"><thead><tr><th>Analito</th><th>Coges (${esc(S.curva.alicU || "mL")})</th><th>µg/mL</th></tr></thead><tbody>
-      ${analitos().map(an => { const c = ptConc(L, an, kind), cr = ref ? ptConc(ref, an, "cal") : null;
+      ${lvAns(L).map(an => { const c = ptConc(L, an, kind), cr = ref ? ptConc(ref, an, "cal") : null;
         const off = c != null && cr != null && Math.abs(c - cr) / cr * 100 > (PCFG().calib.tolQC || 10);
         return `<tr><td>${esc(an)}</td><td style="width:96px"><input type="text" inputmode="decimal" class="mono" style="min-height:38px;padding:6px 8px" data-pt="${list}|${i}|a|${esc(an)}" value="${esc(L.alic[an])}" ${dis}></td>
           <td class="n">${c == null ? "—" : fnum(c * 1000)}${off ? ` <span class="tag">≠ ${esc(L.ref)}</span>` : ""}</td></tr>`; }).join("")}
@@ -1704,7 +1734,7 @@ function viewCurva(){
   if (!ans.length) return `<div class="eyebrow">Curva y QC</div><h1>Curva de calibración</h1><div class="notice warn">No hay analitos registrados. Vuelve a Patrones.</div>`;
   const devs = curvaDevs(), avisos = curvaDevs.avisos || [];
   return `<div class="eyebrow">Curva y QC</div><h1>Curva de calibración y QC</h1>
-    <p class="lead">Cada punto lleva ${ans.length > 1 ? `los ${ans.length} analitos` : "el analito"}. La recta sale de los patrones de <b>calibración</b>; los QC, de los de <b>verificación</b>.${S.session.cfg.niveles.length ? " Los volúmenes vienen de la plantilla del PNT." : " Escribe los volúmenes del PNT: se guardarán para la próxima vez."}</p>
+    <p class="lead">${ans.length > 1 ? `Por defecto cada punto lleva los ${ans.length} analitos. Si preparas varias rectas, marca en cada matraz los analitos que lleva y ponle nombre (ej. CAF-P1, TEO-P1).` : "Cada punto lleva el analito."} La recta sale de los patrones de <b>calibración</b>; los QC, de los de <b>verificación</b>.${S.session.cfg.niveles.length ? " Los volúmenes vienen de la plantilla del PNT." : " Escribe los volúmenes del PNT: se guardarán para la próxima vez."}</p>
     <div class="stack">
       ${eqPanelHTML("curva", locked)}
       <div class="card"><div class="card-head"><h2>Disoluciones para la curva</h2><span class="chip">Calibración</span></div>${ans.map(an => srcHTML("cal|" + an, locked)).join("")}</div>
@@ -2013,6 +2043,7 @@ function viewItem(){
     return head(`${kindTxt} ${p.n}`, `Datos de la preparación`, `Indica la cantidad y el volumen final. La concentración se calcula al momento.`) +
       `<div class="stack">
         <div class="notice info" style="display:flex;justify-content:space-between;gap:10px;align-items:center"><span><b>${esc(mlabel)}</b> · ${eqSum(p.eq)}</span><button type="button" class="b-sec" style="min-height:36px;font-size:13px" data-act="stage" data-v="prepEq">Cambiar</button></div>
+        ${eqUseHTML(p.eq, measBases(p), p, "prep", p.modo === "masa" ? "¿En qué balanza pesas?" : "¿Con qué mides el volumen?")}
         ${p.modo === "masa" ? capHTML(p.masaCap) : ""}
         ${p.modo === "masa" && t.key !== "muestra" ? `<div class="field"><label class="f" for="pureza">Pureza / riqueza (%)</label><div class="unit"><input type="text" inputmode="decimal" id="pureza" class="mono" data-bind="prep.pureza" value="${esc(p.pureza)}"><span>%</span></div><span class="hint">Del certificado de análisis. Deja 100 si no aplica.</span></div>
           <details class="field" ${p.pmAct || p.pmPat ? "open" : ""}><summary class="f" style="cursor:pointer">¿El patrón es una sal o un hidrato del activo? (peso molecular)</summary>
@@ -2045,6 +2076,7 @@ function viewItem(){
           <div class="field"><label class="f" for="fase">Fase de la que tomas</label><select id="fase" data-bind="dil.fase">${["Superior","Inferior","Intermedia"].map(x => `<option ${d.fase===x?"selected":""}>${x}</option>`).join("")}</select></div></div>
           ${volField("dil.volFase", d.volFase, "¿Cuánto volumen tiene la fase de la que coges?", [], "volfase", "dil.volFaseU", d.volFaseU || "mL")}
           <div class="notice info">Se asume que todo el analito está en la fase de la que tomas.</div>` : ""}
+        ${d.fases ? eqUseHTML(d.eq, ["pipeta"], d, "dil", "¿Con qué pipeta coges la alícuota?") : ""}
         ${d.fases ? volField("dil.alicuota", d.alicuota, "¿Cuánto coges?", VOL_ALIC, "alic", "dil.alicuotaU", d.alicuotaU || "mL") + volField("dil.enrase", d.enrase, "¿A qué volumen lo llevas?", VOL_FINAL, "enrase") : ""}
         <div id="calc"></div>
         <div class="ask" id="dil-ask" hidden><div class="q">¿Has terminado la dilución?</div>
@@ -2099,7 +2131,7 @@ function buildLista(){
   const row = (tipo, code, sol, conc) => out.push({ id:"l_" + uid(), tipo, code, sol, conc, pos:String(pos++), iny:"1" });
   if (S.analisis && S.analisis.blanco !== false) row("Blanco", "BLANCO", "", "");
   const cfg = PCFG().calib, curva = cfg && S.curva && !S.na.patron;
-  if (curva) S.curva.niveles.forEach(L => row("Calibración", L.n, `${analitos().length} analitos`, ""));
+  if (curva) S.curva.niveles.forEach(L => row("Calibración", L.n, lvAns(L).length === analitos().length ? `${analitos().length} analitos` : lvAns(L).join(", "), ""));
   else for (const it of liveItems("patron")) for (const p of validPreps(it).filter(p => p.finishedAt)) { const ch = chain(it, p), nd = p.dils.filter(d => d.estado==="valida" && d.finishedAt).length;
     row("Patrón", it.code, `P${p.n}${nd ? ` · D${nd}` : ""}`, ch.final.C != null ? fconc(ch.final.C, ch.final.unit) : ""); }
   const qcs = curva ? S.curva.qcs : []; let qi = 0, sinceQC = 0;
@@ -2281,7 +2313,7 @@ function regHTML(){
     html += `<div class="reg-t">Curva de calibración y QC</div><div class="reg-item">`;
     html += `<div class="reg-ev"><div class="h"><b>Disoluciones de partida</b></div>${dl(analitos().flatMap(an => ["cal","qc"].map(k => { const o = srcObj(k + "|" + an), so = solById(o.src);
       return [`${k === "cal" ? "Curva" : "QC"} · ${an}`, so ? `${esc(so.label)} · ${esc(fconc(so.C, so.unit))}${!srcMatch(so, srcWant(k + "|" + an)) ? ` <span class="tag">${esc(o.just)}</span>` : ""}` : "—"]; })))}<div>${dl([["Equipos", eqSum(S.curva.eq)]])}</div></div>`;
-    for (const [list, kind] of [["niveles","cal"],["qcs","qc"]]) for (const L of S.curva[list]) html += `<div class="reg-ev"><div class="h"><b>${esc(L.n)}</b><span class="t">${L.hecho ? esc(human(L.hecho)) : "pendiente"}</span></div>${dl([["Enrase", esc(L.vf) + " mL"], ...analitos().map(an => [an, `${esc(L.alic[an])} mL → ${fnum((ptConc(L, an, kind) || NaN) * 1000)} µg/mL`])])}</div>`;
+    for (const [list, kind] of [["niveles","cal"],["qcs","qc"]]) for (const L of S.curva[list]) html += `<div class="reg-ev"><div class="h"><b>${esc(L.n)}</b><span class="t">${L.hecho ? esc(human(L.hecho)) : "pendiente"}</span></div>${dl([["Enrase", esc(L.vf) + " mL"], ...lvAns(L).map(an => [an, `${esc(L.alic[an])} ${esc(S.curva.alicU || "mL")} → ${fnum((ptConc(L, an, kind) || NaN) * 1000)} µg/mL`]), eqUsoOf(S.curva.eq, ["pipeta"], L) && eqUseOpts(S.curva.eq, ["pipeta"]).length > 1 ? ["Pipeta", esc(eqUsoOf(S.curva.eq, ["pipeta"], L).code)] : null])}</div>`;
     if (S.curva.dev) html += `<div class="reg-ev"><span class="motivo">Diferencias con el PNT: ${esc(S.curva.dev)}</span></div>`;
     html += `</div>`;
   }
@@ -2485,8 +2517,15 @@ const ACT = {
   "cap-unit": el => { const c = S.caps[el.dataset.cap]; if (c.unit === el.dataset.v) return; c.unit = el.dataset.v; c.validated = false; S.unitPref = S.unitPref || {}; const it = itemById(el.dataset.cap.split(":")[1]); S.unitPref["masa:" + (it ? it.tanda : "")] = c.unit; save(); render(); },
   "vol-unit": el => { const [o, f] = bindTarget(el.dataset.bind); if (!o) return; o[f] = el.dataset.v; S.unitPref = S.unitPref || {}; S.unitPref.vol = el.dataset.v; save(); render(); },
   "fort-unit": el => { const p = prepById(itemById(S.edit.itemId), S.edit.prepId); p.fort.rows[el.dataset.an].uLU = el.dataset.v; save(); render(); },
+  "pt-an": el => { const [list, i] = el.dataset.l.split("|"), L = S.curva[list][+i], an = el.dataset.v, cur = lvAns(L);
+    L.ans = cur.includes(an) ? cur.filter(a => a !== an) : [...cur, an]; save(); render(); },
+  "eq-uso": el => { const h = el.dataset.h; let o = null;
+    if (h === "prep") o = prepById(itemById(S.edit.itemId), S.edit.prepId);
+    else if (h === "dil") o = dilById(prepById(itemById(S.edit.itemId), S.edit.prepId), S.edit.dilId);
+    else { const [list, i] = h.split("|"); o = S.curva[list][+i]; }
+    if (o) { o.eqUso = el.dataset.v; save(); render(); } },
   "pt-add": el => { const list = el.dataset.v, arr = S.curva[list], last = arr[arr.length-1];
-    if (list === "niveles") arr.push({ n:"P" + (arr.length + 1), vf: last ? last.vf : "", alic:{}, hecho:"" });
+    if (list === "niveles") { let n = arr.length + 1; while (arr.some(x => x.n === "P" + n)) n++; arr.push({ n:"P" + n, vf: last ? last.vf : "", alic:{}, hecho:"", ...(last && last.ans ? { ans:[...last.ans] } : {}), ...(last && last.eqUso ? { eqUso:last.eqUso } : {}) }); }
     else { const mid = S.curva.niveles[Math.floor((S.curva.niveles.length - 1) / 2)]; arr.push({ n:"QC" + (arr.length + 1), ref: mid ? mid.n : "", vf: mid ? mid.vf : "", alic: mid ? { ...mid.alic } : {}, hecho:"" }); }
     curvaInit(); save(); render(); },
   "pt-del": el => { const arr = S.curva[el.dataset.v]; if (arr.length && !arr[arr.length-1].hecho) { const L = arr.pop(); if (el.dataset.v === "niveles") S.curva.qcs.forEach(q => { if (q.ref === L.n) q.ref = ""; }); } save(); render(); },
@@ -2563,7 +2602,8 @@ const ACT = {
   },
   "prep-mode": el => { const it = itemById(S.edit.itemId), p = prepById(it, S.edit.prepId); const old = eqRequired(stageKeyOf(S.edit)); p.modo = el.dataset.v;
     if (p.eq) { const now = eqRequired(stageKeyOf(S.edit)); p.eq.tipos = p.eq.tipos.filter(t => now.includes(t) || !old.includes(t) || p.eq.asign[t]); }
-    eqInit(stageKeyOf(S.edit)); save(); render(); },
+    const eq = eqInit(stageKeyOf(S.edit)); if (p.modo === "volumen" && !eq.tipos.some(t => VOLUMETRICO.includes(eqBase(t)))) eq.tipos.push("pipeta");
+    save(); render(); },
   "stage": el => { S.edit.stage = el.dataset.v; S.eqScan = null; save(); render(); window.scrollTo(0,0); },
   "eq-toggle": el => { const sk = el.dataset.stage, eq = eqResolve(sk).obj.eq, t = el.dataset.tipo;
     if (eq.tipos.includes(t)) { eq.tipos = eq.tipos.filter(x => x !== t); delete eq.asign[t]; if (S.eqScan && S.eqScan.tipo === t) S.eqScan = null; } else eq.tipos.push(t);
@@ -2725,7 +2765,10 @@ document.addEventListener("input", ev => {
   if (el.dataset.patjust) { S.patJust = S.patJust || {}; S.patJust[el.dataset.patjust] = { motivo: el.value, at: isoLocal() }; save(); live(); return; }
   if (el.dataset.srcjust) { srcObj(el.dataset.srcjust).just = el.value; save(); live(); return; }
   if (el.dataset.fortul) { const it = itemById(S.edit.itemId), p = prepById(it, S.edit.prepId); p.fort.rows[el.dataset.fortul].uL = el.value.trim(); save(); live(); return; }
-  if (el.dataset.pt) { const [list, i, f, an] = el.dataset.pt.split("|"); const L = S.curva[list][+i]; if (f === "vf") L.vf = el.value.trim(); else L.alic[an] = el.value.trim(); save(); live(); return; }
+  if (el.dataset.pt) { const [list, i, f, an] = el.dataset.pt.split("|"); const L = S.curva[list][+i];
+    if (f === "vf") L.vf = el.value.trim();
+    else if (f === "n") { const old = L.n, nv = el.value.trim().toUpperCase(); L.n = nv; S.curva.qcs.forEach(q => { if (q.ref === old) q.ref = nv; }); }
+    else L.alic[an] = el.value.trim(); save(); live(); return; }
   if (el.dataset.ancheck) { const c = S.analisis.checks[el.dataset.ancheck]; if (c) { c.nota = el.value; save(); live(); } return; }
   if (el.dataset.lista) { const [id, f] = el.dataset.lista.split(":"); const r = S.analisis.lista.find(x => x.id === id); if (r) { r[f] = el.value.trim(); save(); live(); } return; }
   if (el.dataset.eqname) { if (S.eqScan) S.eqScan.nombre = el.value; save(); return; }
@@ -2746,7 +2789,9 @@ document.addEventListener("change", ev => {
   if (el.dataset.srcconf) { srcObj(el.dataset.srcconf).conf = el.checked; save(); render(); return; }
   if (el.dataset.entok) { S.entregaOk = el.checked ? { at:isoLocal(), por:S.session.operator } : null; save(); render(); return; }
   if (el.dataset.qcref) { S.curva.qcs[+el.dataset.qcref].ref = el.value; save(); render(); return; }
-  if (el.dataset.pthecho) { const [list, i] = el.dataset.pthecho.split("|"); S.curva[list][+i].hecho = el.checked ? isoLocal() : ""; save(); render(); return; }
+  if (el.dataset.pthecho) { const [list, i] = el.dataset.pthecho.split("|"), L = S.curva[list][+i];
+    if (el.checked) { const e = levelErr(L); if (e) { el.checked = false; toast(e); return; } }
+    L.hecho = el.checked ? isoLocal() : ""; save(); render(); return; }
   if (el.dataset.pt || el.dataset.fortul) { render(); return; }
   if (el.dataset.eqadd) { const t = el.value; if (!t) return; const eq = eqResolve(el.dataset.eqadd).obj.eq; if (!eq.tipos.includes(t)) eq.tipos.push(t); eq.confirmedAt = ""; save(); render(); return; }
   if (el.dataset.capok) { const k = el.dataset.capok; S.caps[k].validated = el.checked; save(); paintCap(k); live(); return; }
@@ -2829,7 +2874,7 @@ function plantillaDeHoy(){
   c.analitos = [...new Set([...(prev ? prev.analitos : []), ...analitos()])];
   if (c.curva && S.curva && !S.na.patron) {
     const lv = (L, kind) => { const an = analitos(), al = {}; an.forEach(a => al[a] = L.alic[a]); const vals = [...new Set(Object.values(al))];
-      return Object.assign({ n:L.n, vf:L.vf, alic: vals.length === 1 ? vals[0] : (vals[0] || "") , alicAn: al }, kind === "qc" ? { ref:L.ref } : {}); };
+      return Object.assign({ n:L.n, vf:L.vf, alic: vals.length === 1 ? vals[0] : (vals[0] || "") , alicAn: al }, L.ans ? { ans:[...L.ans] } : {}, kind === "qc" ? { ref:L.ref } : {}); };
     c.niveles = S.curva.niveles.map(L => lv(L, "cal")); c.qcs = S.curva.qcs.map(L => lv(L, "qc")); c.alicU = S.curva.alicU || "mL";
   }
   for (const it of liveItems("muestra")) for (const p of validPreps(it).filter(p => p.control === "fortificada" && p.fort && p.fort.doneAt)) {
@@ -2863,7 +2908,7 @@ const CSV_COLS = ["ID_Ensayo","Codigo_Trabajo","Fecha_Analisis","Operador","Situ
   "Factor_Dilucion","Factor_Dilucion_Acumulado","Concentracion","Unidad_Concentracion","Lectura","Unidad_Lectura",
   "Analito","Uso_Patron","Submatriz","Tipo_Control","Disolucion_Origen","Conc_Origen_mg_mL","Volumen_Anadido_uL","Cantidad_Anadida_ug","Nivel_Fortificacion_mg_kg","Nivel_Objetivo_mg_kg","Justificacion",
   "Tecnica","Metodo_Equipo","Edicion_PNT","Secuencia","Ruta_Datos","Posicion_Vial","Num_Inyecciones",
-  "Etapa","Equipo_Tipo","Equipo_Nombre","Equipo_Codigo","Verificacion_Equipo","Nota_Verificacion",
+  "Etapa","Equipo_Tipo","Equipo_Nombre","Equipo_Codigo","Verificacion_Equipo","Nota_Verificacion","Equipo_Medida",
   "Valor_Leido_Foto","Origen_Dato","Motor_Lectura","Confianza_Lectura","Foto","Foto_SHA256","Fecha_Hora_Foto","Observaciones"];
 function eqRows(rows, ctx, etapa, eq, estado){
   if (!eq) return;
@@ -2902,6 +2947,7 @@ function csvRows(){
           Pureza_pct: p.modo==="masa" && it.tanda!=="muestra" ? csvNum(num(p.pureza)) : "", PM_Activo: pmFactor(it, p) !== 1 ? csvNum(num(p.pmAct)) : "", PM_Patron: pmFactor(it, p) !== 1 ? csvNum(num(p.pmPat)) : "",
           Unidades_Muestra: it.tanda==="muestra" && p.uds ? csvNum(num(p.uds)) : "", Volumen_Final_mL: p.modo!=="directo" ? csvNum(num(p.volFinal)) : "",
           Factor_Dilucion_Acumulado:"1", Concentracion:csvNum(pc.C), Unidad_Concentracion:pc.unit, ...(p.modo==="masa" ? capCols(p.masaCap) : {}) });
+        rows[rows.length - 1].Equipo_Medida = (eqUsoOf(p.eq, measBases(p), p) || {}).code || "";
         rows[rows.length - 1].Tipo_Control = p.control ? p.control.toUpperCase() : it.tipoMuestra === "blanco" ? "BLANCO_EXTRACCION" : (it.tanda === "muestra" ? "NORMAL" : "");
         eqRows(rows, { ...ib, Num_Preparacion:p.n, Tipo_Preparacion:p.tipo }, "PREPARACION", p.eq, p.estado==="anulada" ? "ANULADO" : "VALIDO");
         if (p.fort) for (const an of Object.keys(p.fort.rows)) { const r = p.fort.rows[an], so = r.skip ? null : solById(r.src), f = fortRow(it, p, an);
@@ -2917,7 +2963,7 @@ function csvRows(){
             Fecha_Hora_Inicio:d.startedAt, Fecha_Hora_Fin:d.finishedAt, Num_Fases: d.fases===2 ? d.numFases : "1", Fase_Usada: d.fases===2 ? d.fase : "",
             Volumen_Fase_mL: d.fases===2 ? csvNum(mlOf(d.volFase, d.volFaseU)) : "", Alicuota_mL:csvNum(mlOf(d.alicuota, d.alicuotaU)), Volumen_Enrase_mL:csvNum(num(d.enrase)),
             Factor_Dilucion:csvNum(rr.fd), Factor_Dilucion_Acumulado: r ? csvNum(rr.fdAcum) : "", Concentracion:csvNum(rr.C), Unidad_Concentracion:s0.unit,
-            Observaciones: d.fases===2 ? "Concentración calculada asumiendo todo el analito en la fase tomada" : "" });
+            Observaciones: d.fases===2 ? "Concentración calculada asumiendo todo el analito en la fase tomada" : "", Equipo_Medida: (eqUsoOf(d.eq, ["pipeta"], d) || {}).code || "" });
           eqRows(rows, { ...ib, Num_Preparacion:p.n, Num_Dilucion:i+1 }, "DILUCION", d.eq, (d.estado==="anulada" || p.estado==="anulada") ? "ANULADO" : "VALIDO");
         });
       }
@@ -2927,11 +2973,11 @@ function csvRows(){
     }
   }
   if (pnt.calib && S.curva && !S.na.patron) {
-    for (const [list, kind, reg] of [["niveles","cal","CAL_PUNTO"],["qcs","qc","QC_PUNTO"]]) for (const L of S.curva[list]) for (const anl of analitos()) {
+    for (const [list, kind, reg] of [["niveles","cal","CAL_PUNTO"],["qcs","qc","QC_PUNTO"]]) for (const L of S.curva[list]) for (const anl of lvAns(L)) {
       const o = srcObj(kind + "|" + anl), so = solById(o.src);
       rows.push({ ...base, Registro:reg, Etapa:"CURVA", Codigo:L.n, Analito:anl, Estado:"VALIDO", Fecha_Hora_Fin:L.hecho, Disolucion_Origen: so ? so.label : "", Conc_Origen_mg_mL: so ? csvNum(so.C) : "",
         Uso_Patron: so ? usoLbl(so.it.uso) : "", Alicuota_mL:csvNum(mlOf(L.alic[anl], S.curva.alicU)), Volumen_Enrase_mL:csvNum(num(L.vf)), Concentracion:csvNum(ptConc(L, anl, kind)), Unidad_Concentracion:"mg/mL",
-        Justificacion:[o.just, S.curva.dev].filter(Boolean).join(" | "), Observaciones: L.ref ? `Equivale a ${L.ref}` : "" }); }
+        Justificacion:[o.just, S.curva.dev].filter(Boolean).join(" | "), Observaciones: L.ref ? `Equivale a ${L.ref}` : "", Equipo_Medida: (eqUsoOf(S.curva.eq, ["pipeta"], L) || {}).code || "" }); }
     eqRows(rows, base, "CURVA", S.curva.eq, "VALIDO");
   }
   for (const [k, v] of Object.entries(S.patJust || {})) if ((v.motivo || "").trim()) { const [an, u] = k.split("|"); rows.push({ ...base, Registro:"PATRON_NO_DISPONIBLE", Analito:an, Uso_Patron:usoLbl(u), Estado:"VALIDO", Fecha_Hora_Inicio:v.at, Justificacion:v.motivo }); }
