@@ -296,7 +296,7 @@ button:disabled{cursor:not-allowed}
 "use strict";
 
 /* ================= Configuración ================= */
-const APP_VERSION = "1.0-piloto · 06/10/2026i";
+const APP_VERSION = "1.0-piloto · 13/10/2026";
 const DOMINIO = "agqlabs.com";
 const FORMACION = {
   formado:      { lbl:"Formado en el PNT",              acomp:false },
@@ -815,6 +815,25 @@ function tandaReady(k){
   if (S.na[k]) return true;
   const its = liveItems(k);
   return its.length > 0 && its.every(itemComplete) && !(S.edit && itemById(S.edit.itemId)?.tanda === k) && !tandaExtra(k);
+}
+/* Fases libres: se puede ir y volver entre tandas; solo se exige lo técnicamente necesario (curva ← patrones, fortificación ← patrón de verificación, inyección ← todo preparado, finalizar ← todo completo). */
+function screenDone(k){
+  if (!S.session) return false;
+  if (k === "inicio") return true;
+  if (T(k)) return tandaReady(k);
+  if (k === "curva") return !!S.curva && !curvaErrors().length;
+  if (k === "analisis") return !!(S.analisis && S.analisis.lanzadaAt);
+  if (k === "notas") return !!(S.notes.trim() || S.noDev || eqDevs().length);
+  return false;
+}
+const editEntries = () => [...(S.edit ? [S.edit] : []), ...(S.editStack || [])];
+const enCurso = it => editEntries().some(e => e.itemId === it.id);
+function prepPendiente(){
+  const ed = editEntries().map(e => itemById(e.itemId)).find(Boolean);
+  if (ed) return `${ed.code || T(ed.tanda).sing + " " + pad(ed.seq)} está a medias (${T(ed.tanda).plur.toLowerCase()}).`;
+  for (const k of ["reactivo","patron","muestra"]) if (!S.na[k] && liveItems(k).some(i => !itemComplete(i))) return `Hay ${T(k).plur.toLowerCase()} incompletos.`;
+  if (PCFG().calib && !S.na.patron && curvaErrors().length) return "Falta completar la curva y los QC.";
+  return "";
 }
 const screenIdx = k => screens().findIndex(s => s.key === k);
 
@@ -1846,8 +1865,8 @@ function renderHeader(){
   const cur = screenIdx(S.screen);
   $("#tabs").style.gridTemplateColumns = `repeat(${screens().length},1fr)`;
   $("#tabs").innerHTML = screens().map((s, i) => {
-    const cls = S.finalized || i < cur ? "done" : i === cur ? "cur" : "";
-    const can = ses && i <= S.maxScreen && i !== cur;
+    const cls = i === cur ? "cur" : (S.finalized || screenDone(s.key)) ? "done" : "";
+    const can = ses && i !== cur;
     return `<li><button type="button" class="${cls}" data-act="tab" data-screen="${s.key}" ${can ? "" : "disabled"} aria-current="${i===cur?"step":"false"}"><span class="bar"></span><span class="lbl">${esc(s.lbl)}</span></button></li>`;
   }).join("");
 }
@@ -1931,8 +1950,9 @@ function viewInicio(){
       <div class="field"><label class="f" for="acomprol">Su papel</label>
       <select id="acomprol" data-bind="draft.acompRol" ${locked?"disabled":""}><option value="">Selecciona…</option>${ROLES_ACOMP.map(r => `<option ${v.acompRol===r?"selected":""}>${esc(r)}</option>`).join("")}</select></div>` : ""}
     <div class="field"><label class="f" for="ot">Código de trabajo (LIMS)</label>
-      <input type="text" id="ot" class="mono" data-bind="draft.workCode" value="${esc(v.workCode)}" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="OT-26/1003-0412" ${locked?"disabled":""}>
-      <span class="hint">Las fotos se archivan en una carpeta con este código.</span><span class="errmsg" id="ot-err" hidden></span></div>
+      <div style="display:flex;gap:8px"><input type="text" id="ot" class="mono" data-bind="draft.workCode" value="${esc(v.workCode)}" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="OT-26/1003-0412" ${locked?"disabled":""} style="flex:1;min-width:0">
+      ${locked ? "" : `<label class="cam secondary" id="ot-cam" style="min-height:48px;padding:0 14px;flex:none" aria-label="Escanear la OT">${CAMERA_SVG}<span>Escanear</span><input type="file" accept="image/*" capture="environment" data-otscan="1"></label>`}</div>
+      <span class="hint">Escanea el código de barras o la etiqueta de la OT, o escríbelo. Las fotos se archivan en una carpeta con este código.</span><span class="errmsg" id="ot-err" hidden></span></div>
     <fieldset class="field" style="border:0;padding:0;margin:0"><legend class="f" style="margin-bottom:6px">Procedimiento (PNT)</legend>${pntListHTML()}</fieldset>
     <div id="pnt-card">${pntCardHTML()}</div>
     ${CLAUDE.vision ? `<div class="field"><span class="f">Lectura de fotos</span>
@@ -1958,6 +1978,22 @@ function viewInicio(){
     ${STORE.ok ? "" : `<div class="notice warn">Este visor no permite guardar en el dispositivo: si cierras la página se pierde el ensayo en curso.</div>`}
   </div>`;
 }
+/* Escanear la OT: código de barras/QR; si no hay, lectura del texto buscando el formato OT-AA/NNNN-NNNN. El analista confirma en el campo. */
+const OT_RE = /\bO\s?T\s?[-–_]?\s?(\d{2})\s?[\/7]\s?(\d{3,5})\s?[-–]\s?(\d{3,5})\b/;
+const otFrom = t => { const m = String(t || "").toUpperCase().replace(/[|]/g, "/").match(OT_RE); return m ? `OT-${m[1]}/${m[2]}-${m[3]}` : ""; };
+async function scanOT(file){
+  const lab = $("#ot-cam"), txt = lab && lab.querySelector("span"); if (txt) txt.textContent = "Leyendo…"; if (lab) lab.style.pointerEvents = "none";
+  let v = "", raw = "";
+  try {
+    const bc = await readBarcode(file).catch(() => null);
+    if (bc && bc.value) { v = otFrom(bc.value) || bc.value; }
+    if (!v) { const r = await readLocal(file, "code", () => {}, false).catch(() => null); raw = r ? (r.raw || "") + "\n" + (r.value || "") : ""; v = otFrom(raw); }
+    if (!v) { const r = await readPP(file, "code", () => {}).catch(() => null); if (r) { raw += "\n" + r.raw; v = otFrom(raw) || ""; } }
+  } finally { if (txt) txt.textContent = "Escanear"; if (lab) lab.style.pointerEvents = ""; }
+  if (!v) { toast("No he encontrado la OT en la foto. Acércate al código de barras o escríbela."); return; }
+  v = v.toUpperCase().replace(/\s+/g, ""); S.draft.workCode = v; const inp = $("#ot"); if (inp) inp.value = v; save(); live();
+  toast(`OT leída: ${v}. Compruébala.`);
+}
 function otError(v){ if (!v) return ""; if (v.length < 4) return "El código es demasiado corto."; if (!/^[A-Z0-9][A-Z0-9\-\/._]*$/.test(v)) return "Usa solo letras, números y - / . _"; return ""; }
 
 /* ---------- Tanda ---------- */
@@ -1968,7 +2004,7 @@ function itemResult(it){
 }
 function itemStatusChip(it){
   if (it.estado === "anulado") return `<span class="chip bad">Anulado</span>`;
-  if (S.edit && S.edit.itemId === it.id) return `<span class="chip prog">En curso</span>`;
+  if (enCurso(it)) return `<span class="chip prog">A medias</span>`;
   return itemComplete(it) ? `<span class="chip ok">Terminado</span>` : `<span class="chip review">Incompleto</span>`;
 }
 function viewTanda(k){
@@ -1981,16 +2017,17 @@ function viewTanda(k){
         ${it.analito ? `<div class="l2"><b>${esc(it.analito)}</b> · ${usoLbl(it.uso)}</div>` : ""}${it.submatriz ? `<div class="l2">${esc(subLbl(it.submatriz))}${it.preps.some(p=>p.control&&p.estado==="valida") ? " · " + it.preps.filter(p=>p.control&&p.estado==="valida").map(p=>p.control==="doble"?"doble":"fortificada").join(", ") : ""}</div>` : ""}
         ${it.nombre ? `<div class="l2">${esc(it.nombre)}</div>` : ""}
         ${res.map(r => `<div class="res">${esc(r)}</div>`).join("")}${ph.length ? `<div class="res">${esc(ph.join(" · "))}</div>` : ""}
-        <div class="l2">Identificado ${esc(hhmm(it.idDoneAt) || "—")} · ${validPreps(it).length} preparación(es)</div></div>`; }).join("")}</div>`
+        <div class="l2">Identificado ${esc(hhmm(it.idDoneAt) || "—")} · ${validPreps(it).length} preparación(es)</div>
+        ${enCurso(it) && !(S.edit && S.edit.open && S.edit.itemId === it.id) && !S.finalized ? `<button type="button" class="b-pri w100" style="margin-top:8px;min-height:42px" data-act="resume-item" data-item="${it.id}">Continuar donde lo dejé</button>` : ""}</div>`; }).join("")}</div>`
     : `<div class="empty-state"><b>Aún no hay ${t.plur.toLowerCase()} en esta tanda</b><span>Pulsa «Añadir ${t.sing}» para escanear la etiqueta y registrar su preparación.</span></div>`;
   return `<div class="eyebrow">Tanda ${t.n} de 3</div>
     <h1>${t.plur}</h1>
-    <p class="lead">${k==="reactivo" ? "Primero los reactivos: identifica, prepara y diluye cada uno." : k==="patron" ? "Después los patrones: identifica, prepara y diluye cada uno." : "Por último las muestras."}${needsPhT(k) ? " En este PNT cada muestra lleva su lectura de pH." : ""}</p>
+    <p class="lead">Puedes pasar a otra tanda cuando quieras; lo que dejes a medias queda guardado. ${k==="reactivo" ? "Identifica, prepara y diluye cada reactivo." : k==="patron" ? "Identifica, prepara y diluye cada patrón." : "Identifica, prepara y diluye cada muestra."}${needsPhT(k) ? " En este PNT cada muestra lleva su lectura de pH." : ""}</p>
     <div class="stack">
-      ${pausedHere ? `<div class="ask"><div class="q">Tienes ${t.un} ${t.sing} a medias: ${esc(editing.code || `${t.pref} ${pad(editing.seq)}`)}</div><button type="button" class="b-pri" data-act="resume">Continuar donde lo dejé</button></div>` : ""}
+
       ${list}
       ${!S.finalized && !(editing && S.edit.open) && !S.na[k] && k === "muestra" && S.session && PCFG().controles && PCFG().controles.blanco ? `<button type="button" class="b-ghost w100" data-act="add-blanco">+ Blanco de extracción</button>` : ""}
-      ${!S.finalized && !(editing && S.edit.open) && !S.na[k] ? `<button type="button" class="b-ghost w100" data-act="add-item" data-tanda="${k}">+ Añadir ${t.sing}</button>${editing ? `<span class="hint">Lo que tienes a medias queda guardado y vuelves a ello al terminar.</span>` : ""}` : ""}
+      ${!S.finalized && !(editing && S.edit.open) && !S.na[k] ? `<button type="button" class="b-ghost w100" data-act="add-item" data-tanda="${k}">+ Añadir ${t.sing}</button>${editing ? `<span class="hint">Lo que tienes a medias queda guardado: lo retomas con «Continuar donde lo dejé».</span>` : ""}` : ""}
       ${!its.filter(i=>i.estado!=="anulado").length && !S.finalized ? `<label class="check"><input type="checkbox" data-bind="na.${k}" ${S.na[k]?"checked":""}><span>Esta tanda no aplica a este ensayo</span></label>` : ""}
       ${k === "muestra" && S.session && PCFG().controles && !S.edit && its.some(i=>i.estado!=="anulado") && liveItems("muestra").every(itemComplete) && ctrlError() ? `<div class="notice warn">${esc(ctrlError())}</div><button type="button" class="b-sec w100" data-act="ctrl-just">No es posible: justificar en el registro</button>` : ""}
       ${k === "patron" && usesAnalitos() && !S.edit && liveItems("patron").length && liveItems("patron").every(itemComplete) ? analitos().flatMap(an => ["cal","ver"].filter(u => !liveItems("patron").some(i => i.analito === an && i.uso === u && itemComplete(i))).map(u => `<div class="card"><div class="card-head"><h2>${esc(an)}: sin patrón de ${u === "cal" ? "calibración" : "verificación"}</h2></div>
@@ -2142,7 +2179,8 @@ function anInit(){
   const pc = S.session.cfg;
   if (!S.analisis.tecnica && pc.tecnica && TECNICAS[pc.tecnica]) S.analisis.tecnica = pc.tecnica;
   if (!S.analisis.edicionPnt && pc.edicion) S.analisis.edicionPnt = pc.edicion;
-  if (!S.analisis.lista.length) S.analisis.lista = buildLista();
+  if (!S.analisis.lanzadaAt && !S.analisis.listaTocada) { const f = buildLista(), key = l => l.map(r => r.tipo + "|" + r.code + "|" + r.sol).join(";");
+    if (!S.analisis.lista.length || key(f) !== key(S.analisis.lista)) S.analisis.lista = f; }
   return S.analisis;
 }
 function buildLista(){
@@ -2178,7 +2216,7 @@ function anSections(){
     { n:4, t:"Método del equipo", err: !a.metodoEquipo.trim() ? "Escribe el método cargado en el equipo." : !a.edicionPnt.trim() ? "Indica la edición del PNT en vigor." : !a.checks.metodo ? "Confirma si el método coincide con el PNT." :
         !chkOk("metodo") ? "Explica la discrepancia del método." : (a.checks.metodo.v === "si" && !metodoOk()) ? `El método escrito no contiene ${A.metodos.join(" / ")}: revísalo o marca «No» y justifícalo.` : "" },
     { n:5, t:"Secuencia", err: !a.secuencia.trim() ? "Escribe el nombre de la secuencia." : !a.ruta.trim() ? "Indica dónde se guardan los datos (proyecto o carpeta)." : !(a.checks.secuencia && a.checks.secuencia.v === "si") ? "Confirma que la secuencia está creada y guardada." : "" },
-    { n:6, t:"Lista de inyección", err: !a.lista.length ? "La lista de inyección está vacía." : posList.some(p => !p) ? "Indica la posición de cada vial." : new Set(posList).size !== posList.length ? "Hay posiciones de vial repetidas." : "" }
+    { n:6, t:"Lista de inyección", err: prepPendiente() ? "Antes de inyectar: " + prepPendiente() : !a.lista.length ? "La lista de inyección está vacía." : posList.some(p => !p) ? "Indica la posición de cada vial." : new Set(posList).size !== posList.length ? "Hay posiciones de vial repetidas." : "" }
   ];
 }
 function anCheckHTML(k, q, hint){
@@ -2374,8 +2412,8 @@ function live(){
     if (!editingHere) {
       const t = T(sc), idx = TANDAS.indexOf(t), nxt = TANDAS[idx+1];
       const its = liveItems(sc);
-      const why = S.na[sc] ? "" : S.edit ? "Termina primero el elemento en curso." : !its.length ? `Añade al menos ${t.un} ${t.sing} o marca que la tanda no aplica.` : its.some(i => !itemComplete(i)) ? `Hay ${t.plur.toLowerCase()} incompletos.` : tandaExtra(sc);
-      return setBar(`${why ? `<div class="why">${esc(why)}</div>` : ""}<div class="btns"><button class="b-sec back" data-act="goto" data-screen="${prevScreen(sc).key}">Atrás</button><button class="b-pri" data-act="goto" data-screen="${nextScreen(sc).key}" ${tandaReady(sc) && !S.edit ? "" : "disabled"}>Pasar a ${nextScreen(sc).lbl.toLowerCase()}</button></div>`);
+      const why = S.na[sc] ? "" : its.some(enCurso) ? "Tienes algo a medias: puedes seguir con otra tanda y volver después." : !its.length ? `Añade al menos ${t.un} ${t.sing} o marca que la tanda no aplica.` : its.some(i => !itemComplete(i)) ? `Hay ${t.plur.toLowerCase()} incompletos.` : tandaExtra(sc);
+      return setBar(`${why ? `<div class="why">${esc(why)}</div>` : ""}<div class="btns"><button class="b-sec back" data-act="goto" data-screen="${prevScreen(sc).key}">Atrás</button><button class="b-pri" data-act="goto" data-screen="${nextScreen(sc).key}">Pasar a ${nextScreen(sc).lbl.toLowerCase()}</button></div>`);
     }
     const it = itemById(e.itemId), p = prepById(it, e.prepId);
     if (e.stage === "id") {
@@ -2429,7 +2467,7 @@ function live(){
   }
   if (sc === "curva") {
     const errs = curvaErrors();
-    return setBar(`${errs.length ? `<div class="why">${esc(errs[0])}</div>` : ""}<div class="btns"><button class="b-sec back" data-act="goto" data-screen="patron">Atrás</button><button class="b-pri" data-act="goto" data-screen="muestra" ${errs.length ? "disabled" : ""}>Pasar a muestras</button></div>`);
+    return setBar(`${errs.length ? `<div class="why">${esc(errs[0])}</div>` : ""}<div class="btns"><button class="b-sec back" data-act="goto" data-screen="patron">Atrás</button><button class="b-pri" data-act="goto" data-screen="muestra">Pasar a muestras</button></div>`);
   }
   if (sc === "analisis") {
     const a = S.analisis;
@@ -2439,11 +2477,12 @@ function live(){
     const mo = $("#an-met-ok"); if (mo && a) mo.textContent = !a.metodoEquipo.trim() ? "" : metodoOk() ? "✓ Coincide con el método del PNT." : "✗ No coincide con el método del PNT.";
     const first = secs.find(x => x.err);
     const ask = $("#an-ask"); if (ask) ask.hidden = !!first;
-    return setBar(`<div class="why">${first ? `${first.n}. ${esc(first.err)}` : "Todo listo: confirma arriba que has lanzado la secuencia."}</div><div class="btns"><button class="b-sec back" data-act="goto" data-screen="${prevScreen("analisis").key}">Atrás</button></div>`);
+    const pp = prepPendiente();
+    return setBar(`<div class="why">${pp ? `Antes de inyectar: ${esc(pp)}` : first ? `${first.n}. ${esc(first.err)}` : "Todo listo: confirma arriba que has lanzado la secuencia."}</div><div class="btns"><button class="b-sec back" data-act="goto" data-screen="${prevScreen("analisis").key}">Atrás</button><button class="b-pri" data-act="goto" data-screen="notas">Pasar a notas</button></div>`);
   }
   if (sc === "notas") {
     const why = !S.notes.trim() && !S.noDev && !eqDevs().length ? "Escribe una nota o marca «Sin incidencias»." : "";
-    return setBar(`${why ? `<div class="why">${esc(why)}</div>` : ""}<div class="btns"><button class="b-sec back" data-act="goto" data-screen="${prevScreen("notas").key}">Atrás</button><button class="b-pri" data-act="goto" data-screen="resumen" ${why?"disabled":""}>Ver resumen</button></div>`);
+    return setBar(`${why ? `<div class="why">${esc(why)}</div>` : ""}<div class="btns"><button class="b-sec back" data-act="goto" data-screen="${prevScreen("notas").key}">Atrás</button><button class="b-pri" data-act="goto" data-screen="resumen">Ver resumen</button></div>`);
   }
   if (sc === "resumen") {
     if (S.finalized) { const why = !(S.entregas || []).length ? "Guarda la carpeta del ensayo (paso 1)." : !S.entregaOk ? "Confirma que la carpeta está en SharePoint (paso 2)." : "";
@@ -2465,6 +2504,7 @@ function finalizeBlocker(){
 /* ================= Acciones ================= */
 function go(screen){
   const i = screenIdx(screen);
+  if (S.edit && S.edit.open && screen !== S.screen) S.edit.open = false;
   S.screen = screen; S.maxScreen = Math.max(S.maxScreen, i);
   save(); render(); window.scrollTo(0, 0);
 }
@@ -2502,11 +2542,8 @@ function startEditFromReg(it, patch){
 const ACT = {
   "tab": el => go(el.dataset.screen),
   "goto": el => { const tgt = el.dataset.screen; const fwd = screenIdx(tgt) > screenIdx(S.screen);
-    if (fwd && T(S.screen) && !tandaReady(S.screen)) return;
-    if (fwd && S.screen === "analisis" && !(S.analisis && S.analisis.lanzadaAt)) return;
-    if (fwd && S.screen === "curva" && curvaErrors().length) return;
-    const from = S.screen; go(tgt);
-    if (fwd && !CLOUD.ok && from !== "inicio" && backupAge() > 20) setTimeout(() => offerBackup(`Has terminado «${(screens().find(x => x.key === from) || {}).lbl || from}».`), 400); },
+    const from = S.screen, doneFrom = screenDone(from); go(tgt);
+    if (fwd && doneFrom && !CLOUD.ok && from !== "inicio" && backupAge() > 20) setTimeout(() => offerBackup(`Has terminado «${(screens().find(x => x.key === from) || {}).lbl || from}».`), 400); },
   "slot": async el => { const k = el.dataset.v; if (k === SLOT) return; await flushSave(); await loadSlot(k); closeSheet(); render(); window.scrollTo(0,0); showSwitchOverlay(); },
   "slot-new": () => {
     const free = SLOTS.find(k => !INDEX[k] && k !== SLOT); if (!free) { toast(`Máximo ${SLOTS.length} ensayos en paralelo. Cierra uno desde «Sesión».`); return; }
@@ -2605,6 +2642,10 @@ const ACT = {
   },
   "add-item": el => { if (S.edit) stashEdit(); newItem(el.dataset.tanda); },
   "resume": () => { S.edit.open = true; save(); render(); },
+  "resume-item": el => { const id = el.dataset.item, it = itemById(id); if (!it) return;
+    if (!(S.edit && S.edit.itemId === id)) { const st = S.editStack = S.editStack || [], k = st.findIndex(e => e.itemId === id); if (k < 0) return;
+      const e = st.splice(k, 1)[0]; if (S.edit) { S.edit.open = false; st.push(S.edit); } S.edit = e; }
+    S.edit.open = true; S.screen = it.tanda; const sk = stageKeyOf(S.edit); if (sk) eqInit(sk); save(); render(); window.scrollTo(0, 0); },
   "pause": () => { S.edit.open = false; save(); render(); toast("Guardado. Puedes continuar desde la tanda o el registro."); },
   "item-anular": el => { const it = itemById(el.dataset.item), t = T(it.tanda);
     openSheet({ title:`Anular ${it.code || t.sing}`, body:`<p class="lead" style="margin:0">No se borra: queda en el registro como anulado, con sus fotos y su motivo, y deja de contar en el ensayo${t.key === "patron" ? " (si se usaba para la curva o los QC, tendrás que elegir otra disolución)" : ""}.</p>`, reason:true, danger:true,
@@ -2668,7 +2709,7 @@ const ACT = {
   "an-check": el => { const a = S.analisis, k = el.dataset.k; a.checks[k] = Object.assign(a.checks[k] || {}, { v: el.dataset.v, at: isoLocal() }); save(); render(); },
   "an-blanco": () => { const a = S.analisis; a.blanco = !a.blanco; a.lista = buildLista(); save(); render(); },
   "an-relista": () => openSheet({ title:"Rehacer la lista de inyección", body:`<p class="lead" style="margin:0">Se vuelve a generar con los patrones y muestras del registro. Perderás las posiciones que hayas cambiado.</p>`,
-      confirm:{ label:"Rehacer", run: () => { S.analisis.lista = buildLista(); closeSheet(); save(); render(); } } }),
+      confirm:{ label:"Rehacer", run: () => { S.analisis.lista = buildLista(); S.analisis.listaTocada = false; closeSheet(); save(); render(); } } }),
   "an-launch": () => { if (anSections().some(x => x.err)) return; const a = S.analisis; a.lanzadaAt = isoLocal(); eqConfirm("analisis"); save(); render(); window.scrollTo(0,0); toast("Inyección registrada."); },
   "an-reopen": () => openSheet({ title:"Corregir datos de la inyección", body:`<p class="lead" style="margin:0">La hora de lanzamiento se borrará y tendrás que confirmarla de nuevo.</p>`, reason:true,
       confirm:{ label:"Corregir", run: r => { const a = S.analisis; a.correcciones = (a.correcciones || []).concat([{ at:isoLocal(), motivo:r, lanzadaAntes:a.lanzadaAt }]); a.lanzadaAt = ""; closeSheet(); save(); render(); } } }),
@@ -2691,7 +2732,7 @@ const ACT = {
     if (S.editStack && S.editStack.length && g !== "add") { endEdit(); const back = itemById(S.edit.itemId); save(); S.screen = back.tanda; render(); window.scrollTo(0,0); toast(`Vuelves a ${T(back.tanda).sing} ${back.code || ""}.`); return; }
     save();
     if (g === "add") return newItem(it.tanda);
-    if (g === "next" && !tandaReady(it.tanda)) { go(it.tanda); toast(tandaExtra(it.tanda) || "La tanda aún no está completa."); return; }
+    if (g === "next" && !tandaReady(it.tanda)) { go(nextScreen(it.tanda).key); toast(`Ojo: ${tandaExtra(it.tanda) || "la tanda de " + T(it.tanda).plur.toLowerCase() + " aún no está completa"}. Puedes volver cuando quieras.`); return; }
     if (g === "next") { go(nextScreen(it.tanda).key); if (!CLOUD.ok && backupAge() > 20) setTimeout(() => offerBackup(`Has terminado la tanda de ${T(it.tanda).plur.toLowerCase()}.`), 400); return; }
     if (g === "registro") { S.screen = e.returnTo || it.tanda; render(); return openRegistro(); }
     if (g === "back") return go(e.returnTo || it.tanda);
@@ -2805,7 +2846,7 @@ document.addEventListener("input", ev => {
     else if (f === "n") { const old = L.n, nv = el.value.trim().toUpperCase(); L.n = nv; S.curva.qcs.forEach(q => { if (q.ref === old) q.ref = nv; }); }
     else L.alic[an] = el.value.trim(); save(); live(); return; }
   if (el.dataset.ancheck) { const c = S.analisis.checks[el.dataset.ancheck]; if (c) { c.nota = el.value; save(); live(); } return; }
-  if (el.dataset.lista) { const [id, f] = el.dataset.lista.split(":"); const r = S.analisis.lista.find(x => x.id === id); if (r) { r[f] = el.value.trim(); save(); live(); } return; }
+  if (el.dataset.lista) { const [id, f] = el.dataset.lista.split(":"); const r = S.analisis.lista.find(x => x.id === id); if (r) { r[f] = el.value.trim(); S.analisis.listaTocada = true; save(); live(); } return; }
   if (el.dataset.eqname) { if (S.eqScan) S.eqScan.nombre = el.value; save(); return; }
   if (el.dataset.bind && el.type !== "checkbox" && el.type !== "radio") {
     let v = el.value;
@@ -2819,6 +2860,7 @@ document.addEventListener("change", ev => {
   const el = ev.target;
   if (el.type === "file" && el.dataset.plant) { const f = el.files && el.files[0]; el.value = ""; if (f) importPlantilla(f); return; }
   if (el.type === "file" && el.dataset.restore) { const f = el.files && el.files[0]; el.value = ""; if (f) importBackup(f); return; }
+  if (el.type === "file" && el.dataset.otscan) { const f = el.files && el.files[0]; el.value = ""; if (f) scanOT(f); return; }
   if (el.type === "file" && el.dataset.cap) { const f = el.files && el.files[0]; el.value = ""; if (f) onPhoto(el.dataset.cap, f); return; }
   if (el.dataset.src) { const o = srcObj(el.dataset.src); o.src = el.value; o.conf = false; save(); render(); return; }
   if (el.dataset.srcconf) { srcObj(el.dataset.srcconf).conf = el.checked; save(); render(); return; }
